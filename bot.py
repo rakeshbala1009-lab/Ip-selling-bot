@@ -4,12 +4,13 @@ import sqlite3
 import json
 import asyncio
 from datetime import datetime
-from aiogram import Bot, Dispatcher, types
+from aiogram import Bot, Dispatcher, types, F
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
-from aiogram.utils import executor
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, InputFile
+from aiogram.filters import Command
+from aiogram.filters.command import CommandObject
 from dotenv import load_dotenv
 import aiofiles
 
@@ -21,12 +22,11 @@ BOT_TOKEN = os.getenv('BOT_TOKEN')
 ADMIN_IDS = [int(id.strip()) for id in os.getenv('ADMIN_IDS', '').split(',') if id.strip()]
 
 # Initialize bot and dispatcher
-bot = Bot(token=BOT_TOKEN)
 storage = MemoryStorage()
+bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=storage)
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Multi-language support
@@ -378,7 +378,7 @@ class Form(StatesGroup):
     waiting_for_top_up_proof = State()
 
 # Start command
-@dp.message_handler(commands=['start'])
+@dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     if not is_bot_active():
         lang = get_user_language(message.from_user.id)
@@ -401,28 +401,32 @@ async def cmd_start(message: types.Message):
     conn.close()
 
     # Create main menu keyboard
-    keyboard = InlineKeyboardMarkup(row_width=2)
-    buttons = [
-        InlineKeyboardButton(get_text(message.from_user.id, 'buy_proxy'), callback_data='buy_proxy'),
-        InlineKeyboardButton(get_text(message.from_user.id, 'prices'), callback_data='prices'),
-        InlineKeyboardButton(get_text(message.from_user.id, 'my_proxies'), callback_data='my_proxies'),
-        InlineKeyboardButton(get_text(message.from_user.id, 'balance'), callback_data='balance'),
-        InlineKeyboardButton(get_text(message.from_user.id, 'support'), callback_data='support'),
-        InlineKeyboardButton(get_text(message.from_user.id, 'change_language'), callback_data='change_language')
-    ]
-    keyboard.add(*buttons)
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text=get_text(message.from_user.id, 'buy_proxy'), callback_data='buy_proxy'),
+            InlineKeyboardButton(text=get_text(message.from_user.id, 'prices'), callback_data='prices')
+        ],
+        [
+            InlineKeyboardButton(text=get_text(message.from_user.id, 'my_proxies'), callback_data='my_proxies'),
+            InlineKeyboardButton(text=get_text(message.from_user.id, 'balance'), callback_data='balance')
+        ],
+        [
+            InlineKeyboardButton(text=get_text(message.from_user.id, 'support'), callback_data='support'),
+            InlineKeyboardButton(text=get_text(message.from_user.id, 'change_language'), callback_data='change_language')
+        ]
+    ])
 
     await message.answer(get_text(message.from_user.id, 'welcome'), reply_markup=keyboard)
 
 # Language command
-@dp.message_handler(commands=['lang'])
-async def cmd_lang(message: types.Message):
+@dp.message(Command("lang"))
+async def cmd_lang(message: types.Message, command: CommandObject):
     if not is_bot_active():
         lang = get_user_language(message.from_user.id)
         await message.answer(LANGUAGES[lang]['maintenance_mode'])
         return
 
-    args = message.get_args().lower()
+    args = command.args.lower() if command.args else ""
     if args in ['english', 'bangla', 'hindi']:
         conn = sqlite3.connect('proxy_bot.db')
         cursor = conn.cursor()
@@ -436,26 +440,28 @@ async def cmd_lang(message: types.Message):
         await message.answer(get_text(message.from_user.id, 'invalid_command'))
 
 # Buy command
-@dp.message_handler(commands=['buy'])
+@dp.message(Command("buy"))
 async def cmd_buy(message: types.Message):
     if not is_bot_active():
         lang = get_user_language(message.from_user.id)
         await message.answer(LANGUAGES[lang]['maintenance_mode'])
         return
 
-    keyboard = InlineKeyboardMarkup(row_width=2)
-    buttons = [
-        InlineKeyboardButton(get_text(message.from_user.id, 'one_proxy'), callback_data='package_one_proxy'),
-        InlineKeyboardButton(get_text(message.from_user.id, 'three_day'), callback_data='package_three_day'),
-        InlineKeyboardButton(get_text(message.from_user.id, 'seven_day'), callback_data='package_seven_day'),
-        InlineKeyboardButton(get_text(message.from_user.id, 'monthly'), callback_data='package_monthly')
-    ]
-    keyboard.add(*buttons)
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text=get_text(message.from_user.id, 'one_proxy'), callback_data='package_one_proxy'),
+            InlineKeyboardButton(text=get_text(message.from_user.id, 'three_day'), callback_data='package_three_day')
+        ],
+        [
+            InlineKeyboardButton(text=get_text(message.from_user.id, 'seven_day'), callback_data='package_seven_day'),
+            InlineKeyboardButton(text=get_text(message.from_user.id, 'monthly'), callback_data='package_monthly')
+        ]
+    ])
 
     await message.answer(get_text(message.from_user.id, 'select_package'), reply_markup=keyboard)
 
 # Balance command
-@dp.message_handler(commands=['balance'])
+@dp.message(Command("balance"))
 async def cmd_balance(message: types.Message):
     if not is_bot_active():
         lang = get_user_language(message.from_user.id)
@@ -468,16 +474,17 @@ async def cmd_balance(message: types.Message):
     balance = cursor.fetchone()[0]
     conn.close()
 
-    keyboard = InlineKeyboardMarkup()
-    keyboard.add(
-        InlineKeyboardButton(get_text(message.from_user.id, 'top_up'), callback_data='top_up'),
-        InlineKeyboardButton(get_text(message.from_user.id, 'history'), callback_data='history')
-    )
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text=get_text(message.from_user.id, 'top_up'), callback_data='top_up'),
+            InlineKeyboardButton(text=get_text(message.from_user.id, 'history'), callback_data='history')
+        ]
+    ])
 
     await message.answer(get_text(message.from_user.id, 'current_balance', balance=balance), reply_markup=keyboard)
 
 # Support command
-@dp.message_handler(commands=['support'])
+@dp.message(Command("support"))
 async def cmd_support(message: types.Message, state: FSMContext):
     if not is_bot_active():
         lang = get_user_language(message.from_user.id)
@@ -488,7 +495,7 @@ async def cmd_support(message: types.Message, state: FSMContext):
     await state.set_state(Form.waiting_for_support)
 
 # Admin command
-@dp.message_handler(commands=['admin'])
+@dp.message(Command("admin"))
 async def cmd_admin(message: types.Message):
     if not is_bot_active():
         lang = get_user_language(message.from_user.id)
@@ -499,24 +506,32 @@ async def cmd_admin(message: types.Message):
         await message.answer(get_text(message.from_user.id, 'unauthorized'))
         return
 
-    keyboard = InlineKeyboardMarkup(row_width=2)
-    buttons = [
-        InlineKeyboardButton(get_text(message.from_user.id, 'add_proxy'), callback_data='admin_add_proxy'),
-        InlineKeyboardButton(get_text(message.from_user.id, 'bulk_add_proxy'), callback_data='admin_bulk_add_proxy'),
-        InlineKeyboardButton(get_text(message.from_user.id, 'view_orders'), callback_data='admin_view_orders'),
-        InlineKeyboardButton(get_text(message.from_user.id, 'set_price'), callback_data='admin_set_price'),
-        InlineKeyboardButton(get_text(message.from_user.id, 'payments'), callback_data='admin_payments'),
-        InlineKeyboardButton(get_text(message.from_user.id, 'broadcast'), callback_data='admin_broadcast'),
-        InlineKeyboardButton(get_text(message.from_user.id, 'backup_db'), callback_data='admin_backup_db'),
-        InlineKeyboardButton(get_text(message.from_user.id, 'turn_off'), callback_data='admin_turn_off'),
-        InlineKeyboardButton(get_text(message.from_user.id, 'turn_on'), callback_data='admin_turn_on')
-    ]
-    keyboard.add(*buttons)
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text=get_text(message.from_user.id, 'add_proxy'), callback_data='admin_add_proxy'),
+            InlineKeyboardButton(text=get_text(message.from_user.id, 'bulk_add_proxy'), callback_data='admin_bulk_add_proxy')
+        ],
+        [
+            InlineKeyboardButton(text=get_text(message.from_user.id, 'view_orders'), callback_data='admin_view_orders'),
+            InlineKeyboardButton(text=get_text(message.from_user.id, 'set_price'), callback_data='admin_set_price')
+        ],
+        [
+            InlineKeyboardButton(text=get_text(message.from_user.id, 'payments'), callback_data='admin_payments'),
+            InlineKeyboardButton(text=get_text(message.from_user.id, 'broadcast'), callback_data='admin_broadcast')
+        ],
+        [
+            InlineKeyboardButton(text=get_text(message.from_user.id, 'backup_db'), callback_data='admin_backup_db'),
+            InlineKeyboardButton(text=get_text(message.from_user.id, 'turn_off'), callback_data='admin_turn_off')
+        ],
+        [
+            InlineKeyboardButton(text=get_text(message.from_user.id, 'turn_on'), callback_data='admin_turn_on')
+        ]
+    ])
 
     await message.answer(get_text(message.from_user.id, 'admin_panel'), reply_markup=keyboard)
 
 # Callback query handler
-@dp.callback_query_handler(lambda c: c.data)
+@dp.callback_query(F.data)
 async def process_callback(callback_query: types.CallbackQuery, state: FSMContext):
     user_id = callback_query.from_user.id
     data = callback_query.data
@@ -617,11 +632,12 @@ async def process_callback(callback_query: types.CallbackQuery, state: FSMContex
             for order in orders:
                 order_id, customer_id, username, product, price, proof_photo = order
 
-                keyboard = InlineKeyboardMarkup()
-                keyboard.add(
-                    InlineKeyboardButton(get_text(admin_id, 'approve'), callback_data=f'approve_{order_id}'),
-                    InlineKeyboardButton(get_text(admin_id, 'cancel'), callback_data=f'cancel_{order_id}')
-                )
+                keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                    [
+                        InlineKeyboardButton(text=get_text(admin_id, 'approve'), callback_data=f'approve_{order_id}'),
+                        InlineKeyboardButton(text=get_text(admin_id, 'cancel'), callback_data=f'cancel_{order_id}')
+                    ]
+                ])
 
                 await bot.send_message(
                     admin_id,
@@ -640,12 +656,9 @@ async def process_callback(callback_query: types.CallbackQuery, state: FSMContex
             packages = [row[0] for row in cursor.fetchall()]
             conn.close()
 
-            keyboard = InlineKeyboardMarkup()
-            for package in packages:
-                keyboard.add(InlineKeyboardButton(
-                    get_text(user_id, package),
-                    callback_data=f'set_price_{package}'
-                ))
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text=get_text(user_id, package), callback_data=f'set_price_{package}')] for package in packages
+            ])
 
             await bot.send_message(user_id, "Select package to set price:", reply_markup=keyboard)
 
@@ -768,7 +781,7 @@ async def process_callback(callback_query: types.CallbackQuery, state: FSMContex
     await bot.answer_callback_query(callback_query.id)
 
 # Handle payment proof photo
-@dp.message_handler(content_types=types.ContentType.PHOTO, state=Form.waiting_for_payment_proof)
+@dp.message(Form.waiting_for_payment_proof, F.photo)
 async def process_payment_proof(message: types.Message, state: FSMContext):
     user_data = await state.get_data()
     order_id = user_data.get('order_id')
@@ -785,11 +798,12 @@ async def process_payment_proof(message: types.Message, state: FSMContext):
         # Notify admins
         for admin_id in ADMIN_IDS:
             try:
-                keyboard = InlineKeyboardMarkup()
-                keyboard.add(
-                    InlineKeyboardButton(get_text(admin_id, 'approve'), callback_data=f'approve_{order_id}'),
-                    InlineKeyboardButton(get_text(admin_id, 'cancel'), callback_data=f'cancel_{order_id}')
-                )
+                keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                    [
+                        InlineKeyboardButton(text=get_text(admin_id, 'approve'), callback_data=f'approve_{order_id}'),
+                        InlineKeyboardButton(text=get_text(admin_id, 'cancel'), callback_data=f'cancel_{order_id}')
+                    ]
+                ])
 
                 await bot.send_message(admin_id, f"New payment proof for order #{order_id}")
                 await bot.send_photo(admin_id, message.photo[-1].file_id, reply_markup=keyboard)
@@ -803,7 +817,7 @@ async def process_payment_proof(message: types.Message, state: FSMContext):
     await state.clear()
 
 # Handle top up proof photo
-@dp.message_handler(content_types=types.ContentType.PHOTO, state=Form.waiting_for_top_up_proof)
+@dp.message(Form.waiting_for_top_up_proof, F.photo)
 async def process_top_up_proof(message: types.Message, state: FSMContext):
     # Notify admins about top-up request
     for admin_id in ADMIN_IDS:
@@ -817,7 +831,7 @@ async def process_top_up_proof(message: types.Message, state: FSMContext):
     await state.clear()
 
 # Handle support message
-@dp.message_handler(state=Form.waiting_for_support)
+@dp.message(Form.waiting_for_support)
 async def process_support(message: types.Message, state: FSMContext):
     # Create support ticket
     conn = sqlite3.connect('proxy_bot.db')
@@ -838,7 +852,7 @@ async def process_support(message: types.Message, state: FSMContext):
     await state.clear()
 
 # Handle proxy input
-@dp.message_handler(state=Form.waiting_for_proxy)
+@dp.message(Form.waiting_for_proxy)
 async def process_proxy(message: types.Message, state: FSMContext):
     if message.from_user.id not in ADMIN_IDS:
         await state.clear()
@@ -870,7 +884,7 @@ async def process_proxy(message: types.Message, state: FSMContext):
     await state.clear()
 
 # Handle bulk proxies file
-@dp.message_handler(content_types=types.ContentType.DOCUMENT, state=Form.waiting_for_bulk_proxies)
+@dp.message(Form.waiting_for_bulk_proxies, F.document)
 async def process_bulk_proxies(message: types.Message, state: FSMContext):
     if message.from_user.id not in ADMIN_IDS:
         await state.clear()
@@ -929,7 +943,7 @@ async def process_bulk_proxies(message: types.Message, state: FSMContext):
     await state.clear()
 
 # Handle price input
-@dp.message_handler(state=Form.waiting_for_price)
+@dp.message(Form.waiting_for_price)
 async def process_price(message: types.Message, state: FSMContext):
     if message.from_user.id not in ADMIN_IDS:
         await state.clear()
@@ -954,7 +968,7 @@ async def process_price(message: types.Message, state: FSMContext):
     await state.clear()
 
 # Handle payment methods input
-@dp.message_handler(state=Form.waiting_for_payment_methods)
+@dp.message(Form.waiting_for_payment_methods)
 async def process_payment_methods(message: types.Message, state: FSMContext):
     if message.from_user.id not in ADMIN_IDS:
         await state.clear()
@@ -987,7 +1001,7 @@ async def process_payment_methods(message: types.Message, state: FSMContext):
     await state.clear()
 
 # Handle broadcast message
-@dp.message_handler(state=Form.waiting_for_broadcast)
+@dp.message(Form.waiting_for_broadcast)
 async def process_broadcast(message: types.Message, state: FSMContext):
     if message.from_user.id not in ADMIN_IDS:
         await state.clear()
@@ -1020,7 +1034,7 @@ async def process_broadcast(message: types.Message, state: FSMContext):
     await state.clear()
 
 # Handle invalid commands
-@dp.message_handler()
+@dp.message()
 async def handle_invalid_commands(message: types.Message):
     if not is_bot_active():
         lang = get_user_language(message.from_user.id)
@@ -1029,10 +1043,15 @@ async def handle_invalid_commands(message: types.Message):
 
     await message.answer(get_text(message.from_user.id, 'invalid_command'))
 
-# Main function
-if __name__ == '__main__':
+async def main():
     # Initialize database
     init_db()
 
+    # Configure logging
+    logging.basicConfig(level=logging.INFO)
+
     # Start the bot
-    executor.start_polling(dp, skip_updates=True)
+    await dp.start_polling(bot)
+
+if __name__ == '__main__':
+    asyncio.run(main())
