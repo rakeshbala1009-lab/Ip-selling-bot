@@ -1,1030 +1,1038 @@
-import sqlite3
-import logging
-import re
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, MessageHandler, CallbackContext
-from telegram.ext import filters
 import os
+import logging
+import sqlite3
+import json
+import asyncio
 from datetime import datetime
+from aiogram import Bot, Dispatcher, types
+from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.context import FSMContext
+from aiogram.utils import executor
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, InputFile
+from dotenv import load_dotenv
+import aiofiles
 
-# Enable logging
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
+# Load environment variables
+load_dotenv()
+
+# Bot token and admin IDs from environment variables
+BOT_TOKEN = os.getenv('BOT_TOKEN')
+ADMIN_IDS = [int(id.strip()) for id in os.getenv('ADMIN_IDS', '').split(',') if id.strip()]
+
+# Initialize bot and dispatcher
+bot = Bot(token=BOT_TOKEN)
+storage = MemoryStorage()
+dp = Dispatcher(storage=storage)
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Bot configuration
-BOT_TOKEN = "8146938965:AAFU1GnMhwz3k7TWrZsADHs2D1P_lPNkd3k"
-ADMIN_IDS = [7568642311]  # Your admin ID
-SUPPORTED_CURRENCIES = ["USD", "BDT"]
-DEFAULT_CURRENCY = "BDT"
+# Multi-language support
+LANGUAGES = {
+    'english': {
+        'welcome': '👋 Welcome to Proxy Selling Bot!\n\nChoose an option:',
+        'main_menu': '🏠 Main Menu',
+        'buy_proxy': '🛒 Buy Proxy',
+        'prices': '💰 Prices',
+        'my_proxies': '🔑 My Proxies',
+        'balance': '💳 Balance',
+        'support': '🆘 Support',
+        'change_language': '🌐 Change Language',
+        'invalid_command': '❗ Invalid command.',
+        'select_package': 'Select a proxy package:',
+        'one_proxy': 'One Proxy',
+        'three_day': '3-Day Package',
+        'seven_day': '7-Day Package',
+        'monthly': 'Monthly Package',
+        'payment_instructions': 'Please send payment to one of these methods:\n\n{methods}\n\nAfter payment, upload a screenshot as proof.',
+        'payment_received': 'Payment proof received! Admin will review it shortly.',
+        'current_balance': 'Your current balance: ${balance}',
+        'top_up': '💳 Top Up',
+        'history': '📋 History',
+        'top_up_instructions': 'To top up your balance, send payment to one of these methods:\n\n{methods}\n\nAfter payment, upload a screenshot as proof.',
+        'language_changed': 'Language changed to English.',
+        'support_message': 'Please describe your issue and our support team will contact you shortly.',
+        'support_request_sent': 'Support request sent! We will contact you soon.',
+        'admin_panel': '👨‍💼 Admin Panel',
+        'add_proxy': '➕ Add Proxy',
+        'bulk_add_proxy': '📁 Bulk Add Proxy',
+        'view_orders': '📋 View Orders',
+        'set_price': '💰 Set Price',
+        'payments': '💳 Payments',
+        'broadcast': '📢 Broadcast',
+        'backup_db': '💾 Backup DB',
+        'turn_off': '🔴 Turn Off Bot',
+        'turn_on': '🟢 Turn On Bot',
+        'unauthorized': '❌ Unauthorized access.',
+        'proxy_added': '✅ Proxy added successfully!',
+        'invalid_proxy_format': '❌ Invalid proxy format. Use: IP:Port|Login|Pass|Country|Type',
+        'bulk_proxy_result': '✅ Bulk proxy add completed:\nAdded: {added}\nSkipped: {skipped}',
+        'order_approved': '✅ Order #{order_id} approved. Proxy assigned to user.',
+        'order_cancelled': '❌ Order #{order_id} cancelled.',
+        'price_updated': '✅ Price updated successfully!',
+        'payment_methods_updated': '✅ Payment methods updated successfully!',
+        'broadcast_sent': '✅ Broadcast sent to {count} users.',
+        'db_backup_created': '✅ Database backup created.',
+        'bot_turned_off': '✅ Bot turned off. Users will see maintenance message.',
+        'bot_turned_on': '✅ Bot turned on. Bot is now operational.',
+        'no_pending_orders': 'No pending orders.',
+        'order_details': 'Order #{id}\nUser: @{username}\nPackage: {product}\nAmount: ${price}',
+        'approve': '✅ Approve',
+        'cancel': '❌ Cancel',
+        'enter_price': 'Enter price for {package}:',
+        'enter_payment_methods': 'Enter payment methods (one per line):',
+        'enter_broadcast_message': 'Enter broadcast message:',
+        'maintenance_mode': '🔧 Bot is under maintenance. Please try again later.'
+    },
+    'bangla': {
+        'welcome': '👋 প্রক্সি বিক্রয় বটে স্বাগতম!\n\nএকটি বিকল্প চয়ন করুন:',
+        'main_menu': '🏠 প্রধান মেনু',
+        'buy_proxy': '🛒 প্রক্সি কিনুন',
+        'prices': '💰 দাম',
+        'my_proxies': '🔑 আমার প্রক্সি',
+        'balance': '💳 ব্যালেন্স',
+        'support': '🆘 সহায়তা',
+        'change_language': '🌐 ভাষা পরিবর্তন',
+        'invalid_command': '❗ ভুল কমান্ড।',
+        'select_package': 'একটি প্রক্সি প্যাকেজ নির্বাচন করুন:',
+        'one_proxy': 'একটি প্রক্সি',
+        'three_day': '৩-দিনের প্যাকেজ',
+        'seven_day': '৭-দিনের প্যাকেজ',
+        'monthly': 'মাসিক প্যাকেজ',
+        'payment_instructions': 'দয়া করে এই পদ্ধতিগুলোর একটিতে অর্থপ্রদান করুন:\n\n{methods}\n\nঅর্থপ্রদানের পর, প্রমাণ হিসেবে একটি স্ক্রিনশট আপলোড করুন।',
+        'payment_received': 'পেমেন্ট প্রমাণ প্রাপ্ত! অ্যাডমিন শীঘ্রই এটি পর্যালোচনা করবে।',
+        'current_balance': 'আপনার বর্তমান ব্যালেন্স: ${balance}',
+        'top_up': '💳 টপ আপ',
+        'history': '📋 ইতিহাস',
+        'top_up_instructions': 'আপনার ব্যালেন্স টপ আপ করতে, এই পদ্ধতিগুলোর একটিতে অর্থপ্রদান করুন:\n\n{methods}\n\nঅর্থপ্রদানের পর, प्रमाण হিসেবে একটি স্ক্রিনশট আপলোড করুন।',
+        'language_changed': 'ভাষা বাংলাতে পরিবর্তন করা হয়েছে।',
+        'support_message': 'দয়া করে আপনার সমস্যাটি বর্ণনা করুন এবং আমাদের সহায়তা দল শীঘ্রই আপনার সাথে যোগাযোগ করবে।',
+        'support_request_sent': 'সহায়তা অনুরোধ পাঠানো হয়েছে! আমরা শীঘ্রই আপনার সাথে যোগাযোগ করব।',
+        'admin_panel': '👨‍💼 অ্যাডমিন প্যানেল',
+        'add_proxy': '➕ প্রক্সি যোগ করুন',
+        'bulk_add_proxy': '📁 বাল্ক প্রক্সি যোগ করুন',
+        'view_orders': '📋 অর্ডার দেখুন',
+        'set_price': '💰 দাম নির্ধারণ করুন',
+        'payments': '💳 পেমেন্ট',
+        'broadcast': '📢 ব্রডকাস্ট',
+        'backup_db': '💾 ডিবি ব্যাকআপ',
+        'turn_off': '🔴 বট বন্ধ করুন',
+        'turn_on': '🟢 বট চালু করুন',
+        'unauthorized': '❌ অননুমোদিত অ্যাক্সেস।',
+        'proxy_added': '✅ প্রক্সি সফলভাবে যোগ করা হয়েছে!',
+        'invalid_proxy_format': '❌ অবৈধ প্রক্সি ফরম্যাট। ব্যবহার করুন: IP:Port|Login|Pass|Country|Type',
+        'bulk_proxy_result': '✅ বাল্ক প্রক্সি যোগ সম্পন্ন হয়েছে:\nযোগ করা হয়েছে: {added}\nবাদ দেওয়া হয়েছে: {skipped}',
+        'order_approved': '✅ অর্ডার #{order_id} অনুমোদিত। ব্যবহারকারীকে প্রক্সি বরাদ্দ করা হয়েছে।',
+        'order_cancelled': '❌ অর্ডার #{order_id} বাতিল করা হয়েছে।',
+        'price_updated': '✅ দাম সফলভাবে আপডেট করা হয়েছে!',
+        'payment_methods_updated': '✅ পেমেন্ট পদ্ধতি সফলভাবে আপডেট করা হয়েছে!',
+        'broadcast_sent': '✅ ব্রডকাস্ট {count} ব্যবহারকারীর কাছে পাঠানো হয়েছে।',
+        'db_backup_created': '✅ ডাটাবেস ব্যাকআপ তৈরি করা হয়েছে।',
+        'bot_turned_off': '✅ বট বন্ধ করা হয়েছে। ব্যবহারকারীরা রক্ষণাবেক্ষণের বার্তা দেখতে পাবেন।',
+        'bot_turned_on': '✅ বট চালু করা হয়েছে। বট এখন operational।',
+        'no_pending_orders': 'কোনো বাকি অর্ডার নেই।',
+        'order_details': 'অর্ডার #{id}\nব্যবহারকারী: @{username}\nপ্যাকেজ: {product}\nপরিমাণ: ${price}',
+        'approve': '✅ অনুমোদন করুন',
+        'cancel': '❌ বাতিল করুন',
+        'enter_price': '{package}-এর দাম লিখুন:',
+        'enter_payment_methods': 'পেমেন্ট পদ্ধতি লিখুন (একটি করে লাইন):',
+        'enter_broadcast_message': 'ব্রডকাস্ট বার্তা লিখুন:',
+        'maintenance_mode': '🔧 বটটি রক্ষণাবেক্ষণের মধ্যে রয়েছে। পরে আবার চেষ্টা করুন।'
+    },
+    'hindi': {
+        'welcome': '👋 प्रॉक्सी सेलिंग बॉट में आपका स्वागत है!\n\nएक विकल्प चुनें:',
+        'main_menu': '🏠 मुख्य मेनू',
+        'buy_proxy': '🛒 प्रॉक्सी खरीदें',
+        'prices': '💰 कीमतें',
+        'my_proxies': '🔑 मेरे प्रॉक्सी',
+        'balance': '💳 बैलेंस',
+        'support': '🆘 सहायता',
+        'change_language': '🌐 भाषा बदलें',
+        'invalid_command': '❗ अमान्य कमांड।',
+        'select_package': 'एक प्रॉक्सी पैकेज चुनें:',
+        'one_proxy': 'एक प्रॉक्सी',
+        'three_day': '3-दिन का पैकेज',
+        'seven_day': '7-दिन का पैकेज',
+        'monthly': 'मासिक पैकेज',
+        'payment_instructions': 'कृपया इनमें से किसी एक विधि से भुगतान करें:\n\n{methods}\n\nभुगतान के बाद, प्रमाण के रूप में एक स्क्रीनशॉट अपलोड करें।',
+        'payment_received': 'भुगतान प्रमाण प्राप्त! व्यवस्थापक इसे शीघ्र ही समीक्षा करेगा।',
+        'current_balance': 'आपका वर्तमान बैलेंस: ${balance}',
+        'top_up': '💳 टॉप अप',
+        'history': '📋 इतिहास',
+        'top_up_instructions': 'अपना बैलेंस टॉप अप करने के लिए, इनमें से किसी एक विधि से भुगतान करें:\n\n{methods}\n\nभुगतान के बाद, प्रमाण के रूप में एक स्क्रीनशॉट अपलोड करें।',
+        'language_changed': 'भाषा हिंदी में बदल गई।',
+        'support_message': 'कृपया अपनी समस्या का वर्णन करें और हमारी सहायता टीम शीघ्र ही आपसे संपर्क करेगी।',
+        'support_request_sent': 'सहायता अनुरोध भेजा गया! हम जल्द ही आपसे संपर्क करेंगे।',
+        'admin_panel': '👨‍💼 व्यवस्थापक पैनल',
+        'add_proxy': '➕ प्रॉक्सी जोड़ें',
+        'bulk_add_proxy': '📁 बल्क प्रॉक्सी जोड़ें',
+        'view_orders': '📋 ऑर्डर देखें',
+        'set_price': '💰 कीमत सेट करें',
+        'payments': '💳 भुगतान',
+        'broadcast': '📢 प्रसारण',
+        'backup_db': '💾 डीबी बैकअप',
+        'turn_off': '🔴 बॉट बंद करें',
+        'turn_on': '🟢 बॉट चालू करें',
+        'unauthorized': '❌ अनधिकृत पहुंच।',
+        'proxy_added': '✅ प्रॉक्सी सफलतापूर्वक जोड़ा गया!',
+        'invalid_proxy_format': '❌ अमान्य प्रॉक্সी प्रारूप। उपयोग करें: IP:Port|Login|Pass|Country|Type',
+        'bulk_proxy_result': '✅ बल्क प्रॉक्सी जोड़ना पूरा हुआ:\nजोड़े गए: {added}\nछोड़े गए: {skipped}',
+        'order_approved': '✅ ऑर्डर #{order_id} स्वीकृत। उपयोगकर्ता को प्रॉक्सी असाइन की गई।',
+        'order_cancelled': '❌ ऑर्डर #{order_id} रद्द किया गया।',
+        'price_updated': '✅ कीमत सफलतापूर्वक अपडेट की गई!',
+        'payment_methods_updated': '✅ भुगतान विधियाँ सफलतापूर्वक अपडेट की गईं!',
+        'broadcast_sent': '✅ प्रसारण {count} उपयोगकर्ताओं को भेजा गया।',
+        'db_backup_created': '✅ डेटाबेस बैकअप बनाया गया।',
+        'bot_turned_off': '✅ बॉट बंद कर दिया गया। उपयोगकर्ता रखरखाव संदेश देखेंगे।',
+        'bot_turned_on': '✅ बॉट चालू कर दिया गया। बॉट अब operational है।',
+        'no_pending_orders': 'कोई लंबित ऑर्डर नहीं।',
+        'order_details': 'ऑर्डर #{id}\nउपयोगकर्ता: @{username}\nपैकेज: {product}\nराशि: ${price}',
+        'approve': '✅ स्वीकार करें',
+        'cancel': '❌ रद्द करें',
+        'enter_price': '{package} के लिए कीमत दर्ज करें:',
+        'enter_payment_methods': 'भुगतान विधियाँ दर्ज करें (एक पंक्ति में एक):',
+        'enter_broadcast_message': 'प्रसारण संदेश दर्ज करें:',
+        'maintenance_mode': '🔧 बॉट रखरखाव में है। कृपया बाद में पुन: प्रयास करें।'
+    }
+}
 
 # Database setup
 def init_db():
-    conn = sqlite3.connect('socks5_bot.db')
-    c = conn.cursor()
+    conn = sqlite3.connect('proxy_bot.db')
+    cursor = conn.cursor()
+
     # Users table
-    c.execute('''
-    CREATE TABLE IF NOT EXISTS users
-                (user_id INTEGER PRIMARY KEY, username TEXT, balance REAL DEFAULT 0,
-                 currency TEXT DEFAULT 'BDT', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        telegram_id INTEGER UNIQUE,
+        username TEXT,
+        balance REAL DEFAULT 0,
+        language TEXT DEFAULT 'english',
+        registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
     ''')
-    # Proxies table (with country support)
-    c.execute('''
-    CREATE TABLE IF NOT EXISTS proxies
-                (id INTEGER PRIMARY KEY AUTOINCREMENT, ip TEXT, port INTEGER,
-                 username TEXT, password TEXT, country TEXT, is_sold BOOLEAN DEFAULT FALSE,
-                sold_to INTEGER, sold_at TIMESTAMP)
+
+    # Proxies table
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS proxies (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ip TEXT,
+        port INTEGER,
+        login TEXT,
+        password TEXT,
+        country TEXT,
+        type TEXT,
+        status TEXT DEFAULT 'available',
+        order_id INTEGER,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
     ''')
-    # Payments table
-    c.execute('''
-    CREATE TABLE IF NOT EXISTS payments
-                (id INTEGER PRIMARY KEY AUTOINCREMENT, method_name TEXT,
-                 method_id TEXT, is_active BOOLEAN DEFAULT TRUE)
+
+    # Orders table
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS orders (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        product TEXT,
+        price REAL,
+        status TEXT DEFAULT 'pending',
+        payment_proof_photo TEXT,
+        assigned_proxy_id INTEGER,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
     ''')
-    # Prices table (with currency support)
-    c.execute('''
-    CREATE TABLE IF NOT EXISTS prices
-                (id INTEGER PRIMARY KEY AUTOINCREMENT, quantity INTEGER,
-                 price REAL, currency TEXT)
+
+    # Admin logs table
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS admin_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        admin_id INTEGER,
+        action TEXT,
+        details TEXT,
+        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
     ''')
-    # Deposits table (with approval system)
-    c.execute('''
-    CREATE TABLE IF NOT EXISTS deposits
-                (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, amount REAL,
-                 method TEXT, proof TEXT, status TEXT DEFAULT 'pending',
-                 admin_action_by INTEGER, admin_action_at TIMESTAMP,
-                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)
+
+    # Price list table
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS price_list (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        package_name TEXT UNIQUE,
+        price REAL,
+        currency TEXT DEFAULT 'USD'
+    )
     ''')
+
+    # Support tickets table
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS support_tickets (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        message TEXT,
+        language TEXT,
+        status TEXT DEFAULT 'open',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    ''')
+
+    # Payment methods table
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS payment_methods (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        method TEXT,
+        details TEXT
+    )
+    ''')
+
+    # Bot settings table
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS bot_settings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        setting_key TEXT UNIQUE,
+        setting_value TEXT
+    )
+    ''')
+
     # Insert default prices if not exists
-    for currency in SUPPORTED_CURRENCIES:
-        if currency == "BDT":
-            c.execute("INSERT OR IGNORE INTO prices (quantity, price, currency) VALUES (1, 50, ?)", (currency,))
-            c.execute("INSERT OR IGNORE INTO prices (quantity, price, currency) VALUES (3, 120, ?)", (currency,))
-            c.execute("INSERT OR IGNORE INTO prices (quantity, price, currency) VALUES (5, 180, ?)", (currency,))
-        elif currency == "USD":
-            c.execute("INSERT OR IGNORE INTO prices (quantity, price, currency) VALUES (1, 0.5, ?)", (currency,))
-            c.execute("INSERT OR IGNORE INTO prices (quantity, price, currency) VALUES (3, 1.2, ?)", (currency,))
-            c.execute("INSERT OR IGNORE INTO prices (quantity, price, currency) VALUES (5, 1.8, ?)", (currency,))
-    # Insert default payment methods
-    c.execute("INSERT OR IGNORE INTO payments (method_name, method_id) VALUES ('Bkash', '017XXXXXXXX')")
-    c.execute("INSERT OR IGNORE INTO payments (method_name, method_id) VALUES ('Nagad', '018XXXXXXXX')")
-    c.execute("INSERT OR IGNORE INTO payments (method_name, method_id) VALUES ('Rocket', '019XXXXXXXX')")
-    conn.commit()
-    conn.close()
-
-# Database helper functions
-def get_db_connection():
-    conn = sqlite3.connect('socks5_bot.db')
-    conn.row_factory = sqlite3.Row
-    return conn
-
-def add_user(user_id, username):
-    conn = get_db_connection()
-    c = conn.cursor()
-    c.execute("INSERT OR IGNORE INTO users (user_id, username, currency) VALUES (?, ?, ?)", (user_id, username, DEFAULT_CURRENCY))
-    conn.commit()
-    conn.close()
-
-def get_user_balance(user_id):
-    conn = get_db_connection()
-    c = conn.cursor()
-    c.execute("SELECT balance, currency FROM users WHERE user_id = ?", (user_id,))
-    result = c.fetchone()
-    conn.close()
-    return (result['balance'], result['currency']) if result else (0, DEFAULT_CURRENCY)
-
-def update_user_balance(user_id, amount):
-    conn = get_db_connection()
-    c = conn.cursor()
-    c.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, user_id))
-    conn.commit()
-    conn.close()
-
-def add_proxies(proxies, country):
-    conn = get_db_connection()
-    c = conn.cursor()
-    for proxy in proxies:
-        c.execute("INSERT INTO proxies (ip, port, username, password, country) VALUES (?, ?, ?, ?, ?)",
-                  (proxy['ip'], proxy['port'], proxy['username'], proxy['password'], country))
-    conn.commit()
-    conn.close()
-
-def remove_proxy(ip_port):
-    conn = get_db_connection()
-    c = conn.cursor()
-    ip, port = ip_port.split(':')
-    c.execute("DELETE FROM proxies WHERE ip = ? AND port = ?", (ip, port))
-    conn.commit()
-    conn.close()
-
-def get_available_proxies_count(country=None):
-    conn = get_db_connection()
-    c = conn.cursor()
-    if country:
-        c.execute("SELECT COUNT(*) as count FROM proxies WHERE is_sold = FALSE AND country = ?", (country,))
-    else:
-        c.execute("SELECT COUNT(*) as count FROM proxies WHERE is_sold = FALSE")
-    result = c.fetchone()
-    conn.close()
-    return result['count'] if result else 0
-
-def get_available_countries():
-    conn = get_db_connection()
-    c = conn.cursor()
-    c.execute("SELECT DISTINCT country FROM proxies WHERE is_sold = FALSE ORDER BY country")
-    result = c.fetchall()
-    conn.close()
-    return [r['country'] for r in result] if result else []
-
-def get_proxies_for_user(user_id, limit=5):
-    conn = get_db_connection()
-    c = conn.cursor()
-    c.execute("SELECT ip, port, username, password, country FROM proxies WHERE sold_to = ? ORDER BY sold_at DESC LIMIT ?", (user_id, limit))
-    result = c.fetchall()
-    conn.close()
-    return result
-
-def get_proxies_by_country(country, limit=100):
-    conn = get_db_connection()
-    c = conn.cursor()
-    c.execute("SELECT ip, port, username, password FROM proxies WHERE country = ? AND is_sold = FALSE LIMIT ?", (country, limit))
-    result = c.fetchall()
-    conn.close()
-    return result
-
-def sell_proxies_to_user(user_id, quantity, country=None):
-    conn = get_db_connection()
-    c = conn.cursor()
-    # Get user currency
-    c.execute("SELECT currency FROM users WHERE user_id = ?", (user_id,))
-    user_currency = c.fetchone()['currency']
-    # Get available proxies
-    if country:
-        c.execute("SELECT id, ip, port, username, password FROM proxies WHERE is_sold = FALSE AND country = ? LIMIT ?", (country, quantity))
-    else:
-        c.execute("SELECT id, ip, port, username, password FROM proxies WHERE is_sold = FALSE LIMIT ?", (quantity,))
-    proxies = c.fetchall()
-    if len(proxies) < quantity:
-        return None
-    # Calculate total price
-    c.execute("SELECT price FROM prices WHERE quantity = ? AND currency = ?", (quantity, user_currency))
-    price_info = c.fetchone()
-    if not price_info:
-        return "invalid_quantity"
-    total_price = price_info['price']
-    # Check user balance
-    user_balance, _ = get_user_balance(user_id)
-    if user_balance < total_price:
-        return "insufficient_balance"
-    # Mark proxies as sold
-    proxy_ids = [proxy['id'] for proxy in proxies]
-    placeholders = ','.join(['?'] * len(proxy_ids))
-    c.execute(f"UPDATE proxies SET is_sold = TRUE, sold_to = ?, sold_at = CURRENT_TIMESTAMP WHERE id IN ({placeholders})",
-              (user_id, *proxy_ids))
-    # Deduct from user balance
-    update_user_balance(user_id, -total_price)
-    conn.commit()
-    conn.close()
-    return [dict(proxy) for proxy in proxies]
-
-def get_payment_methods():
-    conn = get_db_connection()
-    c = conn.cursor()
-    c.execute("SELECT method_name, method_id FROM payments WHERE is_active = TRUE")
-    result = c.fetchall()
-    conn.close()
-    return result
-
-def add_payment_method(method_name, method_id):
-    conn = get_db_connection()
-    c = conn.cursor()
-    c.execute("INSERT INTO payments (method_name, method_id) VALUES (?, ?)", (method_name, method_id))
-    conn.commit()
-    conn.close()
-
-def remove_payment_method(method_name):
-    conn = get_db_connection()
-    c = conn.cursor()
-    c.execute("UPDATE payments SET is_active = FALSE WHERE method_name = ?", (method_name,))
-    conn.commit()
-    conn.close()
-
-def get_prices(currency=None):
-    conn = get_db_connection()
-    c = conn.cursor()
-    if currency:
-        c.execute("SELECT quantity, price, currency FROM prices WHERE currency = ? ORDER BY quantity", (currency,))
-    else:
-        c.execute("SELECT quantity, price, currency FROM prices ORDER BY currency, quantity")
-    result = c.fetchall()
-    conn.close()
-    return result
-
-def set_price(quantity, price, currency):
-    conn = get_db_connection()
-    c = conn.cursor()
-    c.execute("INSERT OR REPLACE INTO prices (quantity, price, currency) VALUES (?, ?, ?)", (quantity, price, currency))
-    conn.commit()
-    conn.close()
-
-def add_deposit(user_id, amount, method, proof=None):
-    conn = get_db_connection()
-    c = conn.cursor()
-    c.execute("INSERT INTO deposits (user_id, amount, method, proof) VALUES (?, ?, ?, ?)", (user_id, amount, method, proof))
-    deposit_id = c.lastrowid
-    conn.commit()
-    conn.close()
-    return deposit_id
-
-def get_deposit(deposit_id):
-    conn = get_db_connection()
-    c = conn.cursor()
-    c.execute("SELECT * FROM deposits WHERE id = ?", (deposit_id,))
-    result = c.fetchone()
-    conn.close()
-    return result
-
-def update_deposit_status(deposit_id, status, admin_id=None):
-    conn = get_db_connection()
-    c = conn.cursor()
-    if admin_id:
-        c.execute("UPDATE deposits SET status = ?, admin_action_by = ?, admin_action_at = CURRENT_TIMESTAMP WHERE id = ?", (status, admin_id, deposit_id))
-    else:
-        c.execute("UPDATE deposits SET status = ? WHERE id = ?", (status, deposit_id))
-    conn.commit()
-    conn.close()
-
-def get_user_deposits(user_id, limit=10):
-    conn = get_db_connection()
-    c = conn.cursor()
-    c.execute("SELECT id, amount, method, proof, status, created_at FROM deposits WHERE user_id = ? ORDER BY created_at DESC LIMIT ?", (user_id, limit))
-    result = c.fetchall()
-    conn.close()
-    return result
-
-def get_pending_deposits():
-    conn = get_db_connection()
-    c = conn.cursor()
-    c.execute("SELECT d.id, d.user_id, d.amount, d.method, d.proof, d.created_at, u.username FROM deposits d JOIN users u ON d.user_id = u.user_id WHERE d.status = 'pending' ORDER BY d.created_at ASC")
-    result = c.fetchall()
-    conn.close()
-    return result
-
-def get_stats():
-    conn = get_db_connection()
-    c = conn.cursor()
-    # Total proxies
-    c.execute("SELECT COUNT(*) as count FROM proxies")
-    total_proxies = c.fetchone()['count']
-    # Total users
-    c.execute("SELECT COUNT(*) as count FROM users")
-    total_users = c.fetchone()['count']
-    # Today's sales
-    today = datetime.now().strftime('%Y-%m-%d')
-    c.execute("SELECT COUNT(*) as count FROM proxies WHERE DATE(sold_at) = ?", (today,))
-    today_sales_result = c.fetchone()
-    today_sales = today_sales_result['count'] if today_sales_result else 0
-    # Countries count
-    c.execute("SELECT country, COUNT(*) as count FROM proxies WHERE is_sold = FALSE GROUP BY country")
-    countries = c.fetchall()
-    # Pending deposits count
-    c.execute("SELECT COUNT(*) as count FROM deposits WHERE status = 'pending'")
-    pending_deposits = c.fetchone()['count']
-    conn.close()
-    return {
-        'total_proxies': total_proxies,
-        'total_users': total_users,
-        'today_sales': today_sales,
-        'countries': countries,
-        'pending_deposits': pending_deposits
-    }
-
-# File parsing utility
-def parse_proxy_file(file_content, filename):
-    proxies = []
-    if filename.endswith('.txt'):
-        lines = file_content.split('\n')
-        for line in lines:
-            line = line.strip()
-            if re.match(r'^\d+\.\d+\.\d+\.\d+:\d+:.+:.+$', line):
-                parts = line.split(':')
-                proxies.append({
-                    'ip': parts[0],
-                    'port': int(parts[1]),
-                    'username': parts[2],
-                    'password': parts[3]
-                })
-    elif filename.endswith('.csv'):
-        lines = file_content.split('\n')
-        for line in lines:
-            line = line.strip()
-            if line and not line.startswith('#'):
-                parts = line.split(',')
-                if len(parts) >= 4:
-                    proxies.append({
-                        'ip': parts[0],
-                        'port': int(parts[1]),
-                        'username': parts[2],
-                        'password': parts[3]
-                    })
-    elif filename.endswith('.html'):
-        # Simple HTML parsing - look for table rows
-        rows = re.findall(r'<tr>(.*?)</tr>', file_content, re.DOTALL)
-        for row in rows:
-            cells = re.findall(r'<td>(.*?)</td>', row, re.DOTALL)
-            if len(cells) >= 4:
-                proxies.append({
-                    'ip': cells[0],
-                    'port': int(cells[1]),
-                    'username': cells[2],
-                    'password': cells[3]
-                })
-    return proxies
-
-# Notification functions
-def notify_admins(context, message):
-    for admin_id in ADMIN_IDS:
-        try:
-            context.bot.send_message(chat_id=admin_id, text=message)
-        except Exception as e:
-            logger.error(f"Failed to notify admin {admin_id}: {e}")
-
-def notify_user(context, user_id, message):
-    try:
-        context.bot.send_message(chat_id=user_id, text=message)
-    except Exception as e:
-        logger.error(f"Failed to notify user {user_id}: {e}")
-
-# Bot command handlers
-def start(update: Update, context: CallbackContext):
-    user = update.effective_user
-    add_user(user.id, user.username)
-    keyboard = [
-        [InlineKeyboardButton("💰 Balance", callback_data='user_balance')],
-        [InlineKeyboardButton("💵 Deposit", callback_data='user_deposit')],
-        [InlineKeyboardButton("🛒 Buy (SOCKS5)", callback_data='user_buy_proxy')],
-        [InlineKeyboardButton("🔒 My Proxies", callback_data='user_my_proxies')],
-        [InlineKeyboardButton("📜 My Deposits", callback_data='user_my_deposits')],
-        [InlineKeyboardButton("ℹ️ Prices", callback_data='user_prices')]
+    default_prices = [
+        ('one_proxy', 2.0),
+        ('three_day', 5.0),
+        ('seven_day', 10.0),
+        ('monthly', 30.0)
     ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    update.message.reply_text(
-        "👋 Welcome! You are in SOCKS5 Proxy Bot.\n\n"
-        "📌 Choose any option from the buttons below or use text commands.",
-        reply_markup=reply_markup
-    )
 
-def help_command(update: Update, context: CallbackContext):
-    help_text = (
-        "📖 Available Commands:\n\n"
-        "/start - Show main menu with inline buttons\n"
-        "/help - Show this help message\n"
-        "/prices - Show price list\n"
-        "/stock - Check available proxy stock\n"
-        "/buy [number] - Buy proxies (e.g., /buy 3)\n"
-        "/myproxies - List your active proxies\n"
-        "/export_myproxies - Export your proxies as .txt file\n"
-        "/balance - Check your balance\n"
-        "/deposit - Show deposit instructions\n"
-        "/mydeposits - Show your last 10 deposits\n"
-        "/cancel - Cancel current operation\n\n"
-        "For admins:\n"
-        "/admin - Show admin panel\n"
-        "/addproxy - Upload proxy file\n"
-        "/removeproxy [IP:PORT] - Remove specific proxy\n"
-        "/setpayment [method] [id] - Add payment method\n"
-        "/removepayment [method] - Remove payment method\n"
-        "/setprice [qty] [price] [currency] - Set price\n"
-    )
-    update.message.reply_text(help_text)
+    for package, price in default_prices:
+        cursor.execute('''
+        INSERT OR IGNORE INTO price_list (package_name, price)
+        VALUES (?, ?)
+        ''', (package, price))
 
-def prices(update: Update, context: CallbackContext):
-    user_id = update.effective_user.id
-    _, user_currency = get_user_balance(user_id)
-    prices = get_prices(user_currency)
-    price_list = "\n".join([f"{p['quantity']} proxy - {p['price']} {p['currency']}" for p in prices])
-    update.message.reply_text(f"🏷️ Price List ({user_currency}):\n{price_list}")
-
-def stock(update: Update, context: CallbackContext):
-    count = get_available_proxies_count()
-    countries = get_available_countries()
-    if countries:
-        country_stats = "\n".join([f"{country}: {get_available_proxies_count(country)}" for country in countries])
-        update.message.reply_text(f"📦 Available proxies in stock: {count}\n\nBy country:\n{country_stats}")
-    else:
-        update.message.reply_text(f"📦 Available proxies in stock: {count}")
-
-def buy(update: Update, context: CallbackContext):
-    if not context.args:  # Show country selection for buying
-        countries = get_available_countries()
-        if not countries:
-            update.message.reply_text("❌ No proxies available in stock.")
-            return
-        keyboard = []
-        for country in countries:
-            count = get_available_proxies_count(country)
-            keyboard.append([InlineKeyboardButton(f"{country} ({count} available)", callback_data=f'buy_{country}')])
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        update.message.reply_text("🌍 Select country for proxies:", reply_markup=reply_markup)
-        return
-    try:
-        quantity = int(context.args[0])
-        user_id = update.effective_user.id
-        country = context.user_data.get('buy_country') if 'buy_country' in context.user_data else None
-        result = sell_proxies_to_user(user_id, quantity, country)
-        if result == "insufficient_balance":
-            update.message.reply_text("❌ Insufficient balance. Please deposit first.")
-        elif result == "invalid_quantity":
-            update.message.reply_text("❌ Invalid quantity. You can only buy predefined quantities (e.g., 1, 3, 5).")
-        elif not result:
-            update.message.reply_text("❌ Not enough proxies in stock.")
-        else:
-            proxies_text = "\n".join([
-                f"{p['ip']}:{p['port']}:{p['username']}:{p['password']}"
-                for p in result
-            ])
-            update.message.reply_text(
-                f"✅ Successfully purchased {quantity} proxies:\n\n"
-                f"{proxies_text}\n\n"
-                "You can use /myproxies to view them anytime."
-            )
-            if 'buy_country' in context.user_data:
-                del context.user_data['buy_country']
-    except ValueError:
-        update.message.reply_text("Please provide a valid number. Example: /buy 3")
-
-def myproxies(update: Update, context: CallbackContext):
-    user_id = update.effective_user.id
-    proxies = get_proxies_for_user(user_id)
-    if not proxies:
-        update.message.reply_text("You don't have any proxies yet.")
-        return
-    proxies_list = "\n".join([
-        f"{p['ip']}:{p['port']}:{p['username']}:{p['password']} ({p['country']})"
-        for p in proxies
-    ])
-    update.message.reply_text(f"🔐 Your active proxies:\n{proxies_list}")
-
-def export_myproxies(update: Update, context: CallbackContext):
-    user_id = update.effective_user.id
-    proxies = get_proxies_for_user(user_id, limit=100)  # Increased limit for export
-    if not proxies:
-        update.message.reply_text("You don't have any proxies to export.")
-        return
-    proxies_text = "\n".join([
-        f"{p['ip']}:{p['port']}:{p['username']}:{p['password']}"
-        for p in proxies
-    ])
-    context.bot.send_document(
-        chat_id=update.effective_chat.id,
-        document=proxies_text.encode('utf-8'),
-        filename="my_proxies.txt"
-    )
-
-def balance(update: Update, context: CallbackContext):
-    user_id = update.effective_user.id
-    balance, currency = get_user_balance(user_id)
-    update.message.reply_text(f"✅ Your balance: {balance} {currency}")
-
-def deposit(update: Update, context: CallbackContext):
-    user_id = update.effective_user.id
-    if 'deposit_process' in context.user_data:
-        update.message.reply_text("❌ You already have a deposit in process. Please complete it or use /cancel.")
-        return
-    payment_methods = get_payment_methods()
-    if not payment_methods:
-        update.message.reply_text("No payment methods available. Please contact admin.")
-        return
-    methods_text = "\n".join([f"{p['method_name']}: {p['method_id']}" for p in payment_methods])
-    update.message.reply_text(
-        f"📥 Deposit instructions:\n\n{methods_text}\n\n"
-        "Please send the amount you want to deposit followed by the payment method.\n"
-        "Example: `500 Bkash`\n\n"
-        "After sending money, please provide the transaction ID or proof."
-    )
-    context.user_data['deposit_process'] = 'waiting_amount_method'
-
-def handle_deposit_amount(update: Update, context: CallbackContext):
-    user_id = update.effective_user.id
-    if 'deposit_process' not in context.user_data or context.user_data['deposit_process'] != 'waiting_amount_method':
-        return
-    try:
-        text = update.message.text
-        parts = text.split()
-        if len(parts) < 2:
-            update.message.reply_text("❌ Please provide both amount and payment method. Example: `500 Bkash`")
-            return
-        amount = float(parts[0])
-        method = ' '.join(parts[1:])
-        payment_methods = get_payment_methods()
-        valid_methods = [p['method_name'] for p in payment_methods]
-        if method not in valid_methods:
-            update.message.reply_text(f"❌ Invalid payment method. Available methods: {', '.join(valid_methods)}")
-            return
-        context.user_data['deposit_amount'] = amount
-        context.user_data['deposit_method'] = method
-        context.user_data['deposit_process'] = 'waiting_proof'
-        update.message.reply_text(
-            f"✅ Amount: {amount} {DEFAULT_CURRENCY}\n"
-            f"✅ Method: {method}\n\n"
-            "Please send your transaction ID or proof (screenshot)."
-        )
-    except ValueError:
-        update.message.reply_text("❌ Please provide a valid amount. Example: `500 Bkash`")
-
-def handle_deposit_proof(update: Update, context: CallbackContext):
-    user_id = update.effective_user.id
-    if 'deposit_process' not in context.user_data or context.user_data['deposit_process'] != 'waiting_proof':
-        return
-    if 'deposit_amount' not in context.user_data or 'deposit_method' not in context.user_data:
-        update.message.reply_text("❌ Deposit process error. Please start over with /deposit")
-        context.user_data.pop('deposit_process', None)
-        return
-    amount = context.user_data['deposit_amount']
-    method = context.user_data['deposit_method']
-    proof = None
-    if update.message.text:
-        proof = update.message.text
-    elif update.message.photo:
-        photo = update.message.photo[-1]
-        proof = photo.file_id
-    if not proof:
-        update.message.reply_text("❌ Please provide a valid transaction ID or proof screenshot.")
-        return
-    deposit_id = add_deposit(user_id, amount, method, proof)
-    user = update.effective_user
-    username = f"@{user.username}" if user.username else f"User #{user.id}"
-    if isinstance(proof, str) and not proof.startswith('AgAC'):
-        admin_message = (
-            f"🆕 New Deposit Request #{deposit_id}\n\n"
-            f"👤 User: {username} ({user.id})\n"
-            f"💰 Amount: {amount} {DEFAULT_CURRENCY}\n"
-            f"💳 Method: {method}\n"
-            f"📋 Proof: {proof}\n\n"
-            "Use buttons below to approve or reject:"
-        )
-    else:
-        admin_message = (
-            f"🆕 New Deposit Request #{deposit_id}\n\n"
-            f"👤 User: {username} ({user.id})\n"
-            f"💰 Amount: {amount} {DEFAULT_CURRENCY}\n"
-            f"💳 Method: {method}\n"
-            f"📋 Proof: [Photo attached]\n\n"
-            "Use buttons below to approve or reject:"
-        )
-    keyboard = [
-        [
-            InlineKeyboardButton("✅ Approve", callback_data=f"approve_deposit_{deposit_id}"),
-            InlineKeyboardButton("❌ Reject", callback_data=f"reject_deposit_{deposit_id}")
-        ]
+    # Insert default payment methods if not exists
+    default_methods = [
+        ('BTC', '1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa'),
+        ('USDT', '0x742d35Cc6634C0532925a3b844Bc454e4438f44e'),
+        ('Bank Transfer', 'Account: 1234567890, Name: John Doe')
     ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    for admin_id in ADMIN_IDS:
-        try:
-            if isinstance(proof, str) and not proof.startswith('AgAC'):
-                context.bot.send_message(
-                    chat_id=admin_id,
-                    text=admin_message,
-                    reply_markup=reply_markup
+
+    for method, details in default_methods:
+        cursor.execute('''
+        INSERT OR IGNORE INTO payment_methods (method, details)
+        VALUES (?, ?)
+        ''', (method, details))
+
+    # Insert default bot settings if not exists
+    cursor.execute('''
+    INSERT OR IGNORE INTO bot_settings (setting_key, setting_value)
+    VALUES ('bot_active', 'true')
+    ''')
+
+    conn.commit()
+    conn.close()
+
+# Get user language
+def get_user_language(telegram_id):
+    conn = sqlite3.connect('proxy_bot.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT language FROM users WHERE telegram_id = ?', (telegram_id,))
+    result = cursor.fetchone()
+    conn.close()
+    return result[0] if result else 'english'
+
+# Get text in user's language
+def get_text(telegram_id, text_key, **kwargs):
+    lang = get_user_language(telegram_id)
+    text = LANGUAGES[lang].get(text_key, LANGUAGES['english'].get(text_key, text_key))
+    return text.format(**kwargs) if kwargs else text
+
+# Check if bot is active
+def is_bot_active():
+    conn = sqlite3.connect('proxy_bot.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT setting_value FROM bot_settings WHERE setting_key = "bot_active"')
+    result = cursor.fetchone()
+    conn.close()
+    return result[0] == 'true' if result else True
+
+# Log admin action
+def log_admin_action(admin_id, action, details):
+    conn = sqlite3.connect('proxy_bot.db')
+    cursor = conn.cursor()
+    cursor.execute('INSERT INTO admin_logs (admin_id, action, details) VALUES (?, ?, ?)',
+                  (admin_id, action, details))
+    conn.commit()
+    conn.close()
+
+# States for FSM
+class Form(StatesGroup):
+    waiting_for_proxy = State()
+    waiting_for_bulk_proxies = State()
+    waiting_for_price = State()
+    waiting_for_payment_methods = State()
+    waiting_for_broadcast = State()
+    waiting_for_support = State()
+    waiting_for_payment_proof = State()
+    waiting_for_top_up_proof = State()
+
+# Start command
+@dp.message_handler(commands=['start'])
+async def cmd_start(message: types.Message):
+    if not is_bot_active():
+        lang = get_user_language(message.from_user.id)
+        await message.answer(LANGUAGES[lang]['maintenance_mode'])
+        return
+
+    conn = sqlite3.connect('proxy_bot.db')
+    cursor = conn.cursor()
+
+    # Check if user exists
+    cursor.execute('SELECT * FROM users WHERE telegram_id = ?', (message.from_user.id,))
+    user = cursor.fetchone()
+
+    if not user:
+        # Register new user
+        cursor.execute('INSERT INTO users (telegram_id, username) VALUES (?, ?)',
+                      (message.from_user.id, message.from_user.username))
+        conn.commit()
+
+    conn.close()
+
+    # Create main menu keyboard
+    keyboard = InlineKeyboardMarkup(row_width=2)
+    buttons = [
+        InlineKeyboardButton(get_text(message.from_user.id, 'buy_proxy'), callback_data='buy_proxy'),
+        InlineKeyboardButton(get_text(message.from_user.id, 'prices'), callback_data='prices'),
+        InlineKeyboardButton(get_text(message.from_user.id, 'my_proxies'), callback_data='my_proxies'),
+        InlineKeyboardButton(get_text(message.from_user.id, 'balance'), callback_data='balance'),
+        InlineKeyboardButton(get_text(message.from_user.id, 'support'), callback_data='support'),
+        InlineKeyboardButton(get_text(message.from_user.id, 'change_language'), callback_data='change_language')
+    ]
+    keyboard.add(*buttons)
+
+    await message.answer(get_text(message.from_user.id, 'welcome'), reply_markup=keyboard)
+
+# Language command
+@dp.message_handler(commands=['lang'])
+async def cmd_lang(message: types.Message):
+    if not is_bot_active():
+        lang = get_user_language(message.from_user.id)
+        await message.answer(LANGUAGES[lang]['maintenance_mode'])
+        return
+
+    args = message.get_args().lower()
+    if args in ['english', 'bangla', 'hindi']:
+        conn = sqlite3.connect('proxy_bot.db')
+        cursor = conn.cursor()
+        cursor.execute('UPDATE users SET language = ? WHERE telegram_id = ?',
+                      (args, message.from_user.id))
+        conn.commit()
+        conn.close()
+
+        await message.answer(get_text(message.from_user.id, 'language_changed'))
+    else:
+        await message.answer(get_text(message.from_user.id, 'invalid_command'))
+
+# Buy command
+@dp.message_handler(commands=['buy'])
+async def cmd_buy(message: types.Message):
+    if not is_bot_active():
+        lang = get_user_language(message.from_user.id)
+        await message.answer(LANGUAGES[lang]['maintenance_mode'])
+        return
+
+    keyboard = InlineKeyboardMarkup(row_width=2)
+    buttons = [
+        InlineKeyboardButton(get_text(message.from_user.id, 'one_proxy'), callback_data='package_one_proxy'),
+        InlineKeyboardButton(get_text(message.from_user.id, 'three_day'), callback_data='package_three_day'),
+        InlineKeyboardButton(get_text(message.from_user.id, 'seven_day'), callback_data='package_seven_day'),
+        InlineKeyboardButton(get_text(message.from_user.id, 'monthly'), callback_data='package_monthly')
+    ]
+    keyboard.add(*buttons)
+
+    await message.answer(get_text(message.from_user.id, 'select_package'), reply_markup=keyboard)
+
+# Balance command
+@dp.message_handler(commands=['balance'])
+async def cmd_balance(message: types.Message):
+    if not is_bot_active():
+        lang = get_user_language(message.from_user.id)
+        await message.answer(LANGUAGES[lang]['maintenance_mode'])
+        return
+
+    conn = sqlite3.connect('proxy_bot.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT balance FROM users WHERE telegram_id = ?', (message.from_user.id,))
+    balance = cursor.fetchone()[0]
+    conn.close()
+
+    keyboard = InlineKeyboardMarkup()
+    keyboard.add(
+        InlineKeyboardButton(get_text(message.from_user.id, 'top_up'), callback_data='top_up'),
+        InlineKeyboardButton(get_text(message.from_user.id, 'history'), callback_data='history')
+    )
+
+    await message.answer(get_text(message.from_user.id, 'current_balance', balance=balance), reply_markup=keyboard)
+
+# Support command
+@dp.message_handler(commands=['support'])
+async def cmd_support(message: types.Message, state: FSMContext):
+    if not is_bot_active():
+        lang = get_user_language(message.from_user.id)
+        await message.answer(LANGUAGES[lang]['maintenance_mode'])
+        return
+
+    await message.answer(get_text(message.from_user.id, 'support_message'))
+    await state.set_state(Form.waiting_for_support)
+
+# Admin command
+@dp.message_handler(commands=['admin'])
+async def cmd_admin(message: types.Message):
+    if not is_bot_active():
+        lang = get_user_language(message.from_user.id)
+        await message.answer(LANGUAGES[lang]['maintenance_mode'])
+        return
+
+    if message.from_user.id not in ADMIN_IDS:
+        await message.answer(get_text(message.from_user.id, 'unauthorized'))
+        return
+
+    keyboard = InlineKeyboardMarkup(row_width=2)
+    buttons = [
+        InlineKeyboardButton(get_text(message.from_user.id, 'add_proxy'), callback_data='admin_add_proxy'),
+        InlineKeyboardButton(get_text(message.from_user.id, 'bulk_add_proxy'), callback_data='admin_bulk_add_proxy'),
+        InlineKeyboardButton(get_text(message.from_user.id, 'view_orders'), callback_data='admin_view_orders'),
+        InlineKeyboardButton(get_text(message.from_user.id, 'set_price'), callback_data='admin_set_price'),
+        InlineKeyboardButton(get_text(message.from_user.id, 'payments'), callback_data='admin_payments'),
+        InlineKeyboardButton(get_text(message.from_user.id, 'broadcast'), callback_data='admin_broadcast'),
+        InlineKeyboardButton(get_text(message.from_user.id, 'backup_db'), callback_data='admin_backup_db'),
+        InlineKeyboardButton(get_text(message.from_user.id, 'turn_off'), callback_data='admin_turn_off'),
+        InlineKeyboardButton(get_text(message.from_user.id, 'turn_on'), callback_data='admin_turn_on')
+    ]
+    keyboard.add(*buttons)
+
+    await message.answer(get_text(message.from_user.id, 'admin_panel'), reply_markup=keyboard)
+
+# Callback query handler
+@dp.callback_query_handler(lambda c: c.data)
+async def process_callback(callback_query: types.CallbackQuery, state: FSMContext):
+    user_id = callback_query.from_user.id
+    data = callback_query.data
+
+    if not is_bot_active():
+        lang = get_user_language(user_id)
+        await bot.answer_callback_query(callback_query.id, LANGUAGES[lang]['maintenance_mode'])
+        return
+
+    # Handle package selection
+    if data.startswith('package_'):
+        package = data.replace('package_', '')
+
+        # Get package price
+        conn = sqlite3.connect('proxy_bot.db')
+        cursor = conn.cursor()
+        cursor.execute('SELECT price FROM price_list WHERE package_name = ?', (package,))
+        price = cursor.fetchone()[0]
+        conn.close()
+
+        # Create order
+        conn = sqlite3.connect('proxy_bot.db')
+        cursor = conn.cursor()
+        cursor.execute('INSERT INTO orders (user_id, product, price) VALUES (?, ?, ?)',
+                      (user_id, package, price))
+        order_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+
+        # Get payment methods
+        conn = sqlite3.connect('proxy_bot.db')
+        cursor = conn.cursor()
+        cursor.execute('SELECT method, details FROM payment_methods')
+        methods = cursor.fetchall()
+        conn.close()
+
+        # Format payment methods
+        methods_text = "\n".join([f"{method}: {details}" for method, details in methods])
+
+        await bot.send_message(
+            user_id,
+            get_text(user_id, 'payment_instructions', methods=methods_text)
+        )
+        await state.set_state(Form.waiting_for_payment_proof)
+        await state.update_data(order_id=order_id)
+
+    # Handle top up
+    elif data == 'top_up':
+        # Get payment methods
+        conn = sqlite3.connect('proxy_bot.db')
+        cursor = conn.cursor()
+        cursor.execute('SELECT method, details FROM payment_methods')
+        methods = cursor.fetchall()
+        conn.close()
+
+        # Format payment methods
+        methods_text = "\n".join([f"{method}: {details}" for method, details in methods])
+
+        await bot.send_message(
+            user_id,
+            get_text(user_id, 'top_up_instructions', methods=methods_text)
+        )
+        await state.set_state(Form.waiting_for_top_up_proof)
+
+    # Handle admin actions
+    elif data.startswith('admin_'):
+        if user_id not in ADMIN_IDS:
+            await bot.answer_callback_query(callback_query.id, get_text(user_id, 'unauthorized'))
+            return
+
+        action = data.replace('admin_', '')
+
+        if action == 'add_proxy':
+            await bot.send_message(user_id, "Send proxy in format: IP:Port|Login|Pass|Country|Type")
+            await state.set_state(Form.waiting_for_proxy)
+
+        elif action == 'bulk_add_proxy':
+            await bot.send_message(user_id, "Send a TXT or CSV file with proxies (one per line)")
+            await state.set_state(Form.waiting_for_bulk_proxies)
+
+        elif action == 'view_orders':
+            conn = sqlite3.connect('proxy_bot.db')
+            cursor = conn.cursor()
+            cursor.execute('''
+            SELECT o.id, o.user_id, u.username, o.product, o.price, o.payment_proof_photo
+            FROM orders o
+            JOIN users u ON o.user_id = u.telegram_id
+            WHERE o.status = 'pending'
+            ''')
+            orders = cursor.fetchall()
+            conn.close()
+
+            admin_id = callback_query.from_user.id
+            if not orders:
+                await bot.send_message(admin_id, get_text(admin_id, 'no_pending_orders'))
+                return
+
+            for order in orders:
+                order_id, customer_id, username, product, price, proof_photo = order
+
+                keyboard = InlineKeyboardMarkup()
+                keyboard.add(
+                    InlineKeyboardButton(get_text(admin_id, 'approve'), callback_data=f'approve_{order_id}'),
+                    InlineKeyboardButton(get_text(admin_id, 'cancel'), callback_data=f'cancel_{order_id}')
                 )
+
+                await bot.send_message(
+                    admin_id,
+                    get_text(admin_id, 'order_details', id=order_id, username=username, product=product, price=price)
+                )
+
+                if proof_photo:
+                    await bot.send_photo(admin_id, proof_photo, reply_markup=keyboard)
+                else:
+                    await bot.send_message(admin_id, "No payment proof", reply_markup=keyboard)
+
+        elif action == 'set_price':
+            conn = sqlite3.connect('proxy_bot.db')
+            cursor = conn.cursor()
+            cursor.execute('SELECT package_name FROM price_list')
+            packages = [row[0] for row in cursor.fetchall()]
+            conn.close()
+
+            keyboard = InlineKeyboardMarkup()
+            for package in packages:
+                keyboard.add(InlineKeyboardButton(
+                    get_text(user_id, package),
+                    callback_data=f'set_price_{package}'
+                ))
+
+            await bot.send_message(user_id, "Select package to set price:", reply_markup=keyboard)
+
+        elif action == 'payments':
+            conn = sqlite3.connect('proxy_bot.db')
+            cursor = conn.cursor()
+            cursor.execute('SELECT method, details FROM payment_methods')
+            methods = cursor.fetchall()
+            conn.close()
+
+            methods_text = "\n".join([f"{method}: {details}" for method, details in methods])
+            await bot.send_message(user_id, f"Current payment methods:\n\n{methods_text}")
+            await bot.send_message(user_id, get_text(user_id, 'enter_payment_methods'))
+            await state.set_state(Form.waiting_for_payment_methods)
+
+        elif action == 'broadcast':
+            await bot.send_message(user_id, get_text(user_id, 'enter_broadcast_message'))
+            await state.set_state(Form.waiting_for_broadcast)
+
+        elif action == 'backup_db':
+            # Create backup
+            backup_filename = f"backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db"
+            conn = sqlite3.connect('proxy_bot.db')
+            conn.backup(sqlite3.connect(backup_filename))
+            conn.close()
+
+            # Send backup file
+            await bot.send_document(user_id, InputFile(backup_filename))
+            os.remove(backup_filename)
+
+            log_admin_action(user_id, 'backup_db', 'Database backup created')
+            await bot.send_message(user_id, get_text(user_id, 'db_backup_created'))
+
+        elif action == 'turn_off':
+            conn = sqlite3.connect('proxy_bot.db')
+            cursor = conn.cursor()
+            cursor.execute('UPDATE bot_settings SET setting_value = "false" WHERE setting_key = "bot_active"')
+            conn.commit()
+            conn.close()
+
+            log_admin_action(user_id, 'turn_off', 'Bot turned off')
+            await bot.send_message(user_id, get_text(user_id, 'bot_turned_off'))
+
+        elif action == 'turn_on':
+            conn = sqlite3.connect('proxy_bot.db')
+            cursor = conn.cursor()
+            cursor.execute('UPDATE bot_settings SET setting_value = "true" WHERE setting_key = "bot_active"')
+            conn.commit()
+            conn.close()
+
+            log_admin_action(user_id, 'turn_on', 'Bot turned on')
+            await bot.send_message(user_id, get_text(user_id, 'bot_turned_on'))
+
+    # Handle order approval/cancellation
+    elif data.startswith('approve_') or data.startswith('cancel_'):
+        order_id = int(data.split('_')[1])
+        is_approve = data.startswith('approve_')
+
+        conn = sqlite3.connect('proxy_bot.db')
+        cursor = conn.cursor()
+
+        if is_approve:
+            # Get order details
+            cursor.execute('SELECT user_id, product, price FROM orders WHERE id = ?', (order_id,))
+            order = cursor.fetchone()
+            user_id, product, price = order
+
+            # Get available proxy
+            cursor.execute('SELECT id, ip, port, login, password, country, type FROM proxies WHERE status = "available" LIMIT 1')
+            proxy = cursor.fetchone()
+
+            if proxy:
+                proxy_id, ip, port, login, password, country, proxy_type = proxy
+
+                # Assign proxy to order
+                cursor.execute('UPDATE orders SET status = "completed", assigned_proxy_id = ? WHERE id = ?',
+                              (proxy_id, order_id))
+
+                # Update proxy status
+                cursor.execute('UPDATE proxies SET status = "sold", order_id = ? WHERE id = ?',
+                              (order_id, proxy_id))
+
+                # Update user balance
+                cursor.execute('UPDATE users SET balance = balance - ? WHERE telegram_id = ?',
+                              (price, user_id))
+
+                conn.commit()
+
+                # Send proxy details to user
+                proxy_details = f"Your proxy details:\nIP: {ip}\nPort: {port}\nLogin: {login}\nPassword: {password}\nCountry: {country}\nType: {proxy_type}"
+                await bot.send_message(user_id, proxy_details)
+
+                # Notify admin
+                await bot.send_message(callback_query.from_user.id,
+                                     get_text(callback_query.from_user.id, 'order_approved', order_id=order_id))
+
+                log_admin_action(callback_query.from_user.id, 'approve_order', f'Order #{order_id} approved')
             else:
-                context.bot.send_photo(
-                    chat_id=admin_id,
-                    photo=proof,
-                    caption=admin_message,
-                    reply_markup=reply_markup
+                await bot.send_message(callback_query.from_user.id, "No available proxies")
+        else:
+            # Cancel order
+            cursor.execute('UPDATE orders SET status = "cancelled" WHERE id = ?', (order_id,))
+            conn.commit()
+
+            # Notify admin
+            await bot.send_message(callback_query.from_user.id,
+                                 get_text(callback_query.from_user.id, 'order_cancelled', order_id=order_id))
+
+            log_admin_action(callback_query.from_user.id, 'cancel_order', f'Order #{order_id} cancelled')
+
+        conn.close()
+
+    # Handle price setting
+    elif data.startswith('set_price_'):
+        package = data.replace('set_price_', '')
+        await state.update_data(price_package=package)
+        await bot.send_message(user_id, get_text(user_id, 'enter_price', package=package))
+        await state.set_state(Form.waiting_for_price)
+
+    await bot.answer_callback_query(callback_query.id)
+
+# Handle payment proof photo
+@dp.message_handler(content_types=types.ContentType.PHOTO, state=Form.waiting_for_payment_proof)
+async def process_payment_proof(message: types.Message, state: FSMContext):
+    user_data = await state.get_data()
+    order_id = user_data.get('order_id')
+
+    if order_id:
+        # Save payment proof to order
+        conn = sqlite3.connect('proxy_bot.db')
+        cursor = conn.cursor()
+        cursor.execute('UPDATE orders SET payment_proof_photo = ? WHERE id = ?',
+                      (message.photo[-1].file_id, order_id))
+        conn.commit()
+        conn.close()
+
+        # Notify admins
+        for admin_id in ADMIN_IDS:
+            try:
+                keyboard = InlineKeyboardMarkup()
+                keyboard.add(
+                    InlineKeyboardButton(get_text(admin_id, 'approve'), callback_data=f'approve_{order_id}'),
+                    InlineKeyboardButton(get_text(admin_id, 'cancel'), callback_data=f'cancel_{order_id}')
                 )
+
+                await bot.send_message(admin_id, f"New payment proof for order #{order_id}")
+                await bot.send_photo(admin_id, message.photo[-1].file_id, reply_markup=keyboard)
+            except Exception as e:
+                logger.error(f"Error notifying admin {admin_id}: {e}")
+
+        await message.answer(get_text(message.from_user.id, 'payment_received'))
+    else:
+        await message.answer("Error processing payment proof")
+
+    await state.clear()
+
+# Handle top up proof photo
+@dp.message_handler(content_types=types.ContentType.PHOTO, state=Form.waiting_for_top_up_proof)
+async def process_top_up_proof(message: types.Message, state: FSMContext):
+    # Notify admins about top-up request
+    for admin_id in ADMIN_IDS:
+        try:
+            await bot.send_message(admin_id, f"Top-up request from user @{message.from_user.username}")
+            await bot.send_photo(admin_id, message.photo[-1].file_id)
         except Exception as e:
-            logger.error(f"Failed to notify admin {admin_id}: {e}")
-    update.message.reply_text(
-        f"✅ Your deposit request for {amount} {DEFAULT_CURRENCY} via {method} has been submitted.\n"
-        "Please wait for admin approval. You will be notified once processed."
-    )
-    context.user_data.pop('deposit_process', None)
-    context.user_data.pop('deposit_amount', None)
-    context.user_data.pop('deposit_method', None)
+            logger.error(f"Error notifying admin {admin_id}: {e}")
 
-def mydeposits(update: Update, context: CallbackContext):
-    user_id = update.effective_user.id
-    deposits = get_user_deposits(user_id)
-    if not deposits:
-        update.message.reply_text("You don't have any deposits yet.")
-        return
-    deposits_list = []
-    for deposit in deposits:
-        status_icon = "✅" if deposit['status'] == 'approved' else "❌" if deposit['status'] == 'rejected' else "⏳"
-        deposits_list.append(
-            f"{status_icon} {deposit['amount']} {DEFAULT_CURRENCY} via {deposit['method']} - {deposit['status']} ({deposit['created_at']})"
-        )
-    update.message.reply_text(f"📌 Your deposits:\n" + "\n".join(deposits_list))
+    await message.answer("Top-up request sent! Admin will process it shortly.")
+    await state.clear()
 
-def cancel(update: Update, context: CallbackContext):
-    if 'deposit_process' in context.user_data:
-        context.user_data.pop('deposit_process', None)
-        context.user_data.pop('deposit_amount', None)
-        context.user_data.pop('deposit_method', None)
-    if 'expecting_country' in context.user_data:
-        context.user_data.pop('expecting_country', None)
-    if 'proxy_country' in context.user_data:
-        context.user_data.pop('proxy_country', None)
-    if 'buy_country' in context.user_data:
-        context.user_data.pop('buy_country', None)
-    update.message.reply_text("✅ Current operation cancelled.")
+# Handle support message
+@dp.message_handler(state=Form.waiting_for_support)
+async def process_support(message: types.Message, state: FSMContext):
+    # Create support ticket
+    conn = sqlite3.connect('proxy_bot.db')
+    cursor = conn.cursor()
+    cursor.execute('INSERT INTO support_tickets (user_id, message, language) VALUES (?, ?, ?)',
+                  (message.from_user.id, message.text, get_user_language(message.from_user.id)))
+    conn.commit()
+    conn.close()
 
-# Admin commands
-def admin_panel(update: Update, context: CallbackContext):
-    if update.effective_user.id not in ADMIN_IDS:
-        update.message.reply_text("⛔ This operation is for admins only!")
-        return
-    stats = get_stats()
-    keyboard = [
-        [InlineKeyboardButton("➕ Add Proxy", callback_data='admin_add_proxy')],
-        [InlineKeyboardButton("➖ Remove Proxy", callback_data='admin_remove_proxy')],
-        [InlineKeyboardButton("💳 Set Payment Method", callback_data='admin_set_payment')],
-        [InlineKeyboardButton("🗑 Remove Payment Method", callback_data='admin_remove_payment')],
-        [InlineKeyboardButton("🏷 Set Price", callback_data='admin_set_price')],
-        [InlineKeyboardButton("📊 View Stats", callback_data='admin_view_stats')],
-        [InlineKeyboardButton("📋 Pending Deposits", callback_data='admin_pending_deposits')]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    update.message.reply_text(
-        f"🔐 ADMIN PANEL\n\n"
-        f"📊 Stats:\n"
-        f"• Users: {stats['total_users']}\n"
-        f"• Proxies: {stats['total_proxies']}\n"
-        f"• Today's Sales: {stats['today_sales']}\n"
-        f"• Pending Deposits: {stats['pending_deposits']}\n\n"
-        "Choose from options below:",
-        reply_markup=reply_markup
-    )
+    # Notify admins
+    for admin_id in ADMIN_IDS:
+        try:
+            await bot.send_message(admin_id, f"New support ticket from @{message.from_user.username}:\n\n{message.text}")
+        except Exception as e:
+            logger.error(f"Error notifying admin {admin_id}: {e}")
 
-def add_proxy(update: Update, context: CallbackContext):
-    if update.effective_user.id not in ADMIN_IDS:
-        update.message.reply_text("⛔ This operation is for admins only!")
-        return
-    update.message.reply_text("🌍 Please enter the country name for these proxies:")
-    context.user_data['expecting_country'] = True
+    await message.answer(get_text(message.from_user.id, 'support_request_sent'))
+    await state.clear()
 
-def remove_proxy(update: Update, context: CallbackContext):
-    if update.effective_user.id not in ADMIN_IDS:
-        update.message.reply_text("⛔ This operation is for admins only!")
+# Handle proxy input
+@dp.message_handler(state=Form.waiting_for_proxy)
+async def process_proxy(message: types.Message, state: FSMContext):
+    if message.from_user.id not in ADMIN_IDS:
+        await state.clear()
         return
-    countries = get_available_countries()
-    if not countries:
-        update.message.reply_text("❌ No proxies available to remove.")
-        return
-    keyboard = []
-    for country in countries:
-        count = get_available_proxies_count(country)
-        keyboard.append([InlineKeyboardButton(f"{country} ({count} proxies)", callback_data=f'remove_{country}')])
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    update.message.reply_text("🌍 Select country to remove proxies from:", reply_markup=reply_markup)
 
-def set_payment(update: Update, context: CallbackContext):
-    if update.effective_user.id not in ADMIN_IDS:
-        update.message.reply_text("⛔ This operation is for admins only!")
+    proxy_data = message.text.split('|')
+    if len(proxy_data) != 5:
+        await message.answer(get_text(message.from_user.id, 'invalid_proxy_format'))
         return
-    if len(context.args) < 2:
-        update.message.reply_text(
-            "❌ Please provide payment method name and ID\n\n"
-            "Format: [name] [id]\n"
-            "Example: /setpayment Bkash 017XXXXXXXX"
-        )
-        return
-    method_name = context.args[0]
-    method_id = ' '.join(context.args[1:])
-    add_payment_method(method_name, method_id)
-    update.message.reply_text(f"✅ Added payment method: {method_name} - {method_id}")
 
-def remove_payment(update: Update, context: CallbackContext):
-    if update.effective_user.id not in ADMIN_IDS:
-        update.message.reply_text("⛔ This operation is for admins only!")
+    ip_port = proxy_data[0].split(':')
+    if len(ip_port) != 2:
+        await message.answer(get_text(message.from_user.id, 'invalid_proxy_format'))
         return
-    if not context.args:
-        update.message.reply_text(
-            "❌ Please provide payment method name to remove\n\n"
-            "Example: /removepayment Bkash"
-        )
-        return
-    method_name = context.args[0]
-    remove_payment_method(method_name)
-    update.message.reply_text(f"✅ Removed payment method: {method_name}")
 
-def set_price(update: Update, context: CallbackContext):
-    if update.effective_user.id not in ADMIN_IDS:
-        update.message.reply_text("⛔ This operation is for admins only!")
+    ip, port = ip_port
+    login, password, country, proxy_type = proxy_data[1:]
+
+    # Add proxy to database
+    conn = sqlite3.connect('proxy_bot.db')
+    cursor = conn.cursor()
+    cursor.execute('INSERT INTO proxies (ip, port, login, password, country, type) VALUES (?, ?, ?, ?, ?, ?)',
+                  (ip, int(port), login, password, country, proxy_type))
+    conn.commit()
+    conn.close()
+
+    log_admin_action(message.from_user.id, 'add_proxy', f'Added proxy: {message.text}')
+    await message.answer(get_text(message.from_user.id, 'proxy_added'))
+    await state.clear()
+
+# Handle bulk proxies file
+@dp.message_handler(content_types=types.ContentType.DOCUMENT, state=Form.waiting_for_bulk_proxies)
+async def process_bulk_proxies(message: types.Message, state: FSMContext):
+    if message.from_user.id not in ADMIN_IDS:
+        await state.clear()
         return
-    if len(context.args) < 3:
-        update.message.reply_text(
-            "❌ Please provide quantity, price, and currency\n\n"
-            "Format: [quantity] [price] [currency]\n"
-            "Example: /setprice 1 50 BDT\n"
-            f"Supported currencies: {', '.join(SUPPORTED_CURRENCIES)}"
-        )
+
+    # Download file
+    file_id = message.document.file_id
+    file = await bot.get_file(file_id)
+    file_path = file.file_path
+
+    await bot.download_file(file_path, "proxies.txt")
+
+    # Process file
+    added = 0
+    skipped = 0
+
+    conn = sqlite3.connect('proxy_bot.db')
+    cursor = conn.cursor()
+
+    async with aiofiles.open("proxies.txt", mode='r') as f:
+        content = await f.read()
+        lines = content.split('\n')
+
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+
+            proxy_data = line.split('|')
+            if len(proxy_data) != 5:
+                skipped += 1
+                continue
+
+            ip_port = proxy_data[0].split(':')
+            if len(ip_port) != 2:
+                skipped += 1
+                continue
+
+            try:
+                ip, port = ip_port
+                login, password, country, proxy_type = proxy_data[1:]
+
+                cursor.execute('INSERT INTO proxies (ip, port, login, password, country, type) VALUES (?, ?, ?, ?, ?, ?)',
+                              (ip, int(port), login, password, country, proxy_type))
+                added += 1
+            except:
+                skipped += 1
+
+    conn.commit()
+    conn.close()
+
+    os.remove("proxies.txt")
+
+    log_admin_action(message.from_user.id, 'bulk_add_proxy', f'Added {added} proxies, skipped {skipped}')
+    await message.answer(get_text(message.from_user.id, 'bulk_proxy_result', added=added, skipped=skipped))
+    await state.clear()
+
+# Handle price input
+@dp.message_handler(state=Form.waiting_for_price)
+async def process_price(message: types.Message, state: FSMContext):
+    if message.from_user.id not in ADMIN_IDS:
+        await state.clear()
         return
+
     try:
-        quantity = int(context.args[0])
-        price = float(context.args[1])
-        currency = context.args[2].upper()
-        if currency not in SUPPORTED_CURRENCIES:
-            update.message.reply_text(f"❌ Unsupported currency. Supported: {', '.join(SUPPORTED_CURRENCIES)}")
-            return
-        set_price(quantity, price, currency)
-        update.message.reply_text(f"✅ Set price for {quantity} proxies: {price} {currency}")
+        price = float(message.text)
+        user_data = await state.get_data()
+        package = user_data.get('price_package')
+
+        conn = sqlite3.connect('proxy_bot.db')
+        cursor = conn.cursor()
+        cursor.execute('UPDATE price_list SET price = ? WHERE package_name = ?', (price, package))
+        conn.commit()
+        conn.close()
+
+        log_admin_action(message.from_user.id, 'set_price', f'Set price for {package} to {price}')
+        await message.answer(get_text(message.from_user.id, 'price_updated'))
     except ValueError:
-        update.message.reply_text("❌ Please provide valid numbers for quantity and price")
+        await message.answer("Invalid price. Please enter a number.")
 
-# File upload handler
-def handle_file_upload(update: Update, context: CallbackContext):
-    if update.effective_user.id not in ADMIN_IDS:
-        return
-    if 'expecting_country' in context.user_data and context.user_data['expecting_country']:
-        country = update.message.text
-        context.user_data['proxy_country'] = country
-        context.user_data['expecting_country'] = False
-        update.message.reply_text(f"🌍 Country set to: {country}. Now please upload the proxy file.")
-        return
-    if 'proxy_country' not in context.user_data:
-        update.message.reply_text("❌ Please set country first using /addproxy")
-        return
-    document = update.message.document
-    if not document:
-        return
-    file = context.bot.get_file(document.file_id)
-    filename = document.file_name
-    country = context.user_data['proxy_country']
-    if not (filename.endswith('.txt') or filename.endswith('.csv') or filename.endswith('.html')):
-        update.message.reply_text("❌ Unsupported file format. Please upload .txt, .csv, or .html files.")
-        return
-    file_content = file.download_as_bytearray().decode('utf-8')
-    proxies = parse_proxy_file(file_content, filename)
-    if not proxies:
-        update.message.reply_text("❌ No valid proxies found in the file.")
-        return
-    add_proxies(proxies, country)
-    update.message.reply_text(f"✅ Added {len(proxies)} {country} proxies from {filename}")
-    del context.user_data['proxy_country']
+    await state.clear()
 
-# Button callback handler
-def button_handler(update: Update, context: CallbackContext):
-    query = update.callback_query
-    query.answer()
-    user_id = query.from_user.id
-    data = query.data
-
-    if data == 'user_balance':
-        balance, currency = get_user_balance(user_id)
-        query.edit_message_text(text=f"✅ Your balance: {balance} {currency}")
-    elif data == 'user_deposit':
-        if 'deposit_process' in context.user_data:
-            query.edit_message_text(text="❌ You already have a deposit in process. Please complete it or use /cancel.")
-            return
-        payment_methods = get_payment_methods()
-        if not payment_methods:
-            query.edit_message_text(text="No payment methods available. Please contact admin.")
-            return
-        methods_text = "\n".join([f"{p['method_name']}: {p['method_id']}" for p in payment_methods])
-        query.edit_message_text(
-            text=f"📥 Deposit instructions:\n\n{methods_text}\n\n"
-                 "Please send the amount you want to deposit followed by the payment method.\n"
-                 "Example: `500 Bkash`\n\n"
-                 "After sending money, please provide the transaction ID or proof."
-        )
-        context.user_data['deposit_process'] = 'waiting_amount_method'
-    elif data == 'user_buy_proxy':
-        countries = get_available_countries()
-        if not countries:
-            query.edit_message_text(text="❌ No proxies available in stock.")
-            return
-        keyboard = []
-        for country in countries:
-            count = get_available_proxies_count(country)
-            keyboard.append([InlineKeyboardButton(f"{country} ({count} available)", callback_data=f'buy_{country}')])
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        query.edit_message_text(text="🌍 Select country for proxies:", reply_markup=reply_markup)
-    elif data.startswith('buy_'):
-        country = data[4:]
-        context.user_data['buy_country'] = country
-        query.edit_message_text(text=f"🌍 Selected: {country}. How many proxies do you want to buy? (1, 3, 5...)\n\nExample: /buy 3")
-    elif data == 'user_my_proxies':
-        proxies = get_proxies_for_user(user_id)
-        if not proxies:
-            query.edit_message_text(text="You don't have any proxies yet.")
-            return
-        proxies_list = "\n".join([
-            f"{p['ip']}:{p['port']}:{p['username']}:{p['password']} ({p['country']})"
-            for p in proxies
-        ])
-        query.edit_message_text(text=f"🔐 Your active proxies:\n{proxies_list}")
-    elif data == 'user_my_deposits':
-        deposits = get_user_deposits(user_id)
-        if not deposits:
-            query.edit_message_text(text="You don't have any deposits yet.")
-            return
-        deposits_list = []
-        for deposit in deposits:
-            status_icon = "✅" if deposit['status'] == 'approved' else "❌" if deposit['status'] == 'rejected' else "⏳"
-            deposits_list.append(
-                f"{status_icon} {deposit['amount']} {DEFAULT_CURRENCY} via {deposit['method']} - {deposit['status']} ({deposit['created_at']})"
-            )
-        query.edit_message_text(text=f"📌 Your deposits:\n" + "\n".join(deposits_list))
-    elif data == 'user_prices':
-        user_id = query.from_user.id
-        _, user_currency = get_user_balance(user_id)
-        prices = get_prices(user_currency)
-        price_list = "\n".join([f"{p['quantity']} proxy - {p['price']} {p['currency']}" for p in prices])
-        query.edit_message_text(text=f"🏷️ Price List ({user_currency}):\n{price_list}")
-    # Admin buttons
-    elif data == 'admin_add_proxy':
-        if user_id not in ADMIN_IDS:
-            query.edit_message_text(text="⛔ This operation is for admins only!")
-            return
-        query.edit_message_text(text="🌍 Please enter the country name for these proxies:")
-        context.user_data['expecting_country'] = True
-    elif data == 'admin_remove_proxy':
-        if user_id not in ADMIN_IDS:
-            query.edit_message_text(text="⛔ This operation is for admins only!")
-            return
-        countries = get_available_countries()
-        if not countries:
-            query.edit_message_text(text="❌ No proxies available to remove.")
-            return
-        keyboard = []
-        for country in countries:
-            count = get_available_proxies_count(country)
-            keyboard.append([InlineKeyboardButton(f"{country} ({count} proxies)", callback_data=f'remove_{country}')])
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        query.edit_message_text(text="🌍 Select country to remove proxies from:", reply_markup=reply_markup)
-    elif data.startswith('remove_'):
-        country = data[7:]
-        proxies = get_proxies_by_country(country)
-        if not proxies:
-            query.edit_message_text(text=f"❌ No proxies found for {country}.")
-            return
-        proxies_list = "\n".join([f"{p['ip']}:{p['port']}" for p in proxies[:10]])
-        if len(proxies) > 10:
-            proxies_list += f"\n... and {len(proxies) - 10} more"
-        query.edit_message_text(
-            text=f"❌ Proxies for {country}:\n{proxies_list}\n\n"
-                 "To remove, use: /removeproxy IP:PORT\n"
-                 "Example: /removeproxy 192.168.0.1:1080"
-        )
-    elif data == 'admin_set_payment':
-        if user_id not in ADMIN_IDS:
-            query.edit_message_text(text="⛔ This operation is for admins only!")
-            return
-        query.edit_message_text(text="💳 Add new payment method:\n\nFormat: [name] [id]\nExample: Bkash 017XXXXXXXX")
-    elif data == 'admin_remove_payment':
-        if user_id not in ADMIN_IDS:
-            query.edit_message_text(text="⛔ This operation is for admins only!")
-            return
-        query.edit_message_text(text="🗑️ Enter payment method name to remove:\n\nExample: Bkash")
-    elif data == 'admin_set_price':
-        if user_id not in ADMIN_IDS:
-            query.edit_message_text(text="⛔ This operation is for admins only!")
-            return
-        query.edit_message_text(
-            text="🏷️ Set new proxy price:\n\n"
-                 "Format: [quantity] [price] [currency]\n"
-                 "Example: 1 50 BDT\n"
-                 f"Supported currencies: {', '.join(SUPPORTED_CURRENCIES)}"
-        )
-    elif data == 'admin_view_stats':
-        if user_id not in ADMIN_IDS:
-            query.edit_message_text(text="⛔ This operation is for admins only!")
-            return
-        stats = get_stats()
-        countries_text = "\n".join([f"{c['country']}: {c['count']}" for c in stats['countries']]) if stats['countries'] else "None"
-        query.edit_message_text(
-            text=f"📊 Statistics:\n"
-                 f"Total proxies: {stats['total_proxies']}\n"
-                 f"Total users: {stats['total_users']}\n"
-                 f"Today's sales: {stats['today_sales']}\n"
-                 f"Pending deposits: {stats['pending_deposits']}\n\n"
-                 f"By country:\n{countries_text}"
-        )
-    elif data == 'admin_pending_deposits':
-        if user_id not in ADMIN_IDS:
-            query.edit_message_text(text="⛔ This operation is for admins only!")
-            return
-        deposits = get_pending_deposits()
-        if not deposits:
-            query.edit_message_text(text="✅ No pending deposits.")
-            return
-        deposits_text = ""
-        for deposit in deposits[:5]:
-            deposits_text += (
-                f"🆔 #{deposit['id']}\n"
-                f"👤 {deposit['username']} ({deposit['user_id']})\n"
-                f"💰 {deposit['amount']} {DEFAULT_CURRENCY} via {deposit['method']}\n"
-                f"⏰ {deposit['created_at']}\n\n"
-            )
-        if len(deposits) > 5:
-            deposits_text += f"... and {len(deposits) - 5} more pending deposits\n\n"
-        deposits_text += "Use /admin to manage deposits."
-        query.edit_message_text(text=deposits_text)
-    elif data.startswith('approve_deposit_'):
-        if user_id not in ADMIN_IDS:
-            query.edit_message_text(text="⛔ This operation is for admins only!")
-            return
-        deposit_id = int(data.split('_')[-1])
-        deposit = get_deposit(deposit_id)
-        if not deposit:
-            query.edit_message_text(text="❌ Deposit not found.")
-            return
-        if deposit['status'] != 'pending':
-            query.edit_message_text(text=f"❌ Deposit already {deposit['status']}.")
-            return
-        update_deposit_status(deposit_id, 'approved', user_id)
-        update_user_balance(deposit['user_id'], deposit['amount'])
-        notify_user(
-            context,
-            deposit['user_id'],
-            f"✅ Your deposit of {deposit['amount']} {DEFAULT_CURRENCY} has been approved!\n"
-            f"Your new balance: {get_user_balance(deposit['user_id'])[0]} {DEFAULT_CURRENCY}"
-        )
-        query.edit_message_text(
-            text=f"✅ Deposit #{deposit_id} approved by admin.\n"
-                 f"User: {deposit['user_id']}\n"
-                 f"Amount: {deposit['amount']} {DEFAULT_CURRENCY}"
-        )
-    elif data.startswith('reject_deposit_'):
-        if user_id not in ADMIN_IDS:
-            query.edit_message_text(text="⛔ This operation is for admins only!")
-            return
-        deposit_id = int(data.split('_')[-1])
-        deposit = get_deposit(deposit_id)
-        if not deposit:
-            query.edit_message_text(text="❌ Deposit not found.")
-            return
-        if deposit['status'] != 'pending':
-            query.edit_message_text(text=f"❌ Deposit already {deposit['status']}.")
-            return
-        update_deposit_status(deposit_id, 'rejected', user_id)
-        notify_user(
-            context,
-            deposit['user_id'],
-            f"❌ Your deposit of {deposit['amount']} {DEFAULT_CURRENCY} was rejected.\n"
-            "Please contact admin for more information."
-        )
-        query.edit_message_text(
-            text=f"❌ Deposit #{deposit_id} rejected by admin.\n"
-                 f"User: {deposit['user_id']}\n"
-                 f"Amount: {deposit['amount']} {DEFAULT_CURRENCY}"
-        )
-
-# Message handler for country input
-def handle_country_input(update: Update, context: CallbackContext):
-    if update.effective_user.id not in ADMIN_IDS:
+# Handle payment methods input
+@dp.message_handler(state=Form.waiting_for_payment_methods)
+async def process_payment_methods(message: types.Message, state: FSMContext):
+    if message.from_user.id not in ADMIN_IDS:
+        await state.clear()
         return
-    if 'expecting_country' in context.user_data and context.user_data['expecting_country']:
-        country = update.message.text
-        context.user_data['proxy_country'] = country
-        context.user_data['expecting_country'] = False
-        update.message.reply_text(f"🌍 Country set to: {country}. Now please upload the proxy file.")
 
-# Message handler for deposit amount
-def handle_message(update: Update, context: CallbackContext):
-    # Check if user is in deposit process
-    if 'deposit_process' in context.user_data:
-        if context.user_data['deposit_process'] == 'waiting_amount_method':
-            handle_deposit_amount(update, context)
-        elif context.user_data['deposit_process'] == 'waiting_proof':
-            handle_deposit_proof(update, context)
+    # Clear existing methods
+    conn = sqlite3.connect('proxy_bot.db')
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM payment_methods')
+
+    # Add new methods
+    methods = message.text.split('\n')
+    for method in methods:
+        method = method.strip()
+        if not method:
+            continue
+
+        if ':' in method:
+            method_name, details = method.split(':', 1)
+            cursor.execute('INSERT INTO payment_methods (method, details) VALUES (?, ?)',
+                          (method_name.strip(), details.strip()))
+        else:
+            cursor.execute('INSERT INTO payment_methods (method) VALUES (?)', (method.strip(),))
+
+    conn.commit()
+    conn.close()
+
+    log_admin_action(message.from_user.id, 'update_payment_methods', 'Updated payment methods')
+    await message.answer(get_text(message.from_user.id, 'payment_methods_updated'))
+    await state.clear()
+
+# Handle broadcast message
+@dp.message_handler(state=Form.waiting_for_broadcast)
+async def process_broadcast(message: types.Message, state: FSMContext):
+    if message.from_user.id not in ADMIN_IDS:
+        await state.clear()
         return
-    # Check if admin is setting country
-    handle_country_input(update, context)
 
-def main():
-    init_db()
-    updater = Updater(BOT_TOKEN)
-    dp = updater.dispatcher
-    dp.add_handler(CommandHandler("start", start))
-    dp.add_handler(CommandHandler("help", help_command))
-    dp.add_handler(CommandHandler("prices", prices))
-    dp.add_handler(CommandHandler("stock", stock))
-    dp.add_handler(CommandHandler("buy", buy))
-    dp.add_handler(CommandHandler("myproxies", myproxies))
-    dp.add_handler(CommandHandler("export_myproxies", export_myproxies))
-    dp.add_handler(CommandHandler("balance", balance))
-    dp.add_handler(CommandHandler("deposit", deposit))
-    dp.add_handler(CommandHandler("mydeposits", mydeposits))
-    dp.add_handler(CommandHandler("cancel", cancel))
-    dp.add_handler(CommandHandler("admin", admin_panel))
-    dp.add_handler(CommandHandler("addproxy", add_proxy))
-    dp.add_handler(CommandHandler("removeproxy", remove_proxy))
-    dp.add_handler(CommandHandler("setpayment", set_payment))
-    dp.add_handler(CommandHandler("removepayment", remove_payment))
-    dp.add_handler(CommandHandler("setprice", set_price))
-    dp.add_handler(CallbackQueryHandler(button_handler))
-    dp.add_handler(MessageHandler(filters.Document.ALL, handle_file_upload))
-    dp.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    dp.add_handler(MessageHandler(filters.PHOTO, handle_message))
-    updater.start_polling()
-    logger.info("Bot started successfully!")
-    updater.idle()
+    # Get all users
+    conn = sqlite3.connect('proxy_bot.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT telegram_id, language FROM users')
+    users = cursor.fetchall()
+    conn.close()
 
+    # Send broadcast to all users
+    sent_count = 0
+    for user_id, lang in users:
+        try:
+            # Try to send in user's language first
+            if lang in LANGUAGES:
+                # Check if we have a translation for broadcast message
+                # For simplicity, we'll just send the original message
+                await bot.send_message(user_id, message.text)
+            else:
+                await bot.send_message(user_id, message.text)
+            sent_count += 1
+        except Exception as e:
+            logger.error(f"Error sending broadcast to {user_id}: {e}")
+
+    log_admin_action(message.from_user.id, 'broadcast', f'Sent to {sent_count} users')
+    await message.answer(get_text(message.from_user.id, 'broadcast_sent', count=sent_count))
+    await state.clear()
+
+# Handle invalid commands
+@dp.message_handler()
+async def handle_invalid_commands(message: types.Message):
+    if not is_bot_active():
+        lang = get_user_language(message.from_user.id)
+        await message.answer(LANGUAGES[lang]['maintenance_mode'])
+        return
+
+    await message.answer(get_text(message.from_user.id, 'invalid_command'))
+
+# Main function
 if __name__ == '__main__':
-    main()
+    # Initialize database
+    init_db()
+
+    # Start the bot
+    executor.start_polling(dp, skip_updates=True)
